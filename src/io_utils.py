@@ -138,6 +138,7 @@ def git_state(root: Path) -> dict[str, Any]:
 def environment_snapshot() -> dict[str, Any]:
     try:
         import torch
+        import tqdm
 
         torch_version: str | None = torch.__version__
         torchvision_version: str | None
@@ -149,9 +150,11 @@ def environment_snapshot() -> dict[str, Any]:
             torchvision_version = None
         mps_available = bool(torch.backends.mps.is_available())
         mps_built = bool(torch.backends.mps.is_built())
+        tqdm_version: str | None = tqdm.__version__
     except ImportError:
         torch_version = None
         torchvision_version = None
+        tqdm_version = None
         mps_available = False
         mps_built = False
     return {
@@ -162,6 +165,7 @@ def environment_snapshot() -> dict[str, Any]:
         "platform": platform.platform(),
         "torch": torch_version,
         "torchvision": torchvision_version,
+        "tqdm": tqdm_version,
         "mps_built": mps_built,
         "mps_available": mps_available,
         "pid": os.getpid(),

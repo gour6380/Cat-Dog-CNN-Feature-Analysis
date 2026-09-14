@@ -17,6 +17,7 @@ from src.config import ExperimentConfig
 from src.data import PetRecordDataset, epoch_order, load_registered_splits
 from src.io_utils import atomic_write_json, environment_snapshot, source_hash, utc_now
 from src.model import build_model, state_dict_hash
+from src.progress import status
 from src.runtime import (
     SafetyStop,
     ensure_finite,
@@ -146,10 +147,15 @@ def _synthetic_attack_invariants() -> dict[str, Any]:
     }
 
 
-def run_preflight(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
+def run_preflight(
+    config: ExperimentConfig, device: torch.device, *, progress: bool = True
+) -> dict[str, Any]:
     failure = config.project_path("artifacts") / "failures" / "preflight.json"
     started = time.perf_counter()
     try:
+        status(
+            "Preflight: validating the registered setup and native MPS backend...", enabled=progress
+        )
         setup = _assert_setup(config)
         if device.type != "mps":
             raise SafetyStop("the locked full-training preflight requires --device mps")
@@ -158,6 +164,10 @@ def run_preflight(config: ExperimentConfig, device: torch.device) -> dict[str, A
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
         start_memory = ensure_memory(
             device, config.number("preflight", "minimum_available_memory_gib")
+        )
+        status(
+            "Preflight: checking data splits, augmentations, and matched ordering...",
+            enabled=progress,
         )
         splits = load_registered_splits(config)
         training = splits["training"]
@@ -188,6 +198,7 @@ def run_preflight(config: ExperimentConfig, device: torch.device) -> dict[str, A
         ]
         if order_standard != order_adversarial:
             raise SafetyStop("matched sample order failed")
+        status("Preflight: checking initialization and CPU/MPS logit parity...", enabled=progress)
         first_model = build_model(config)
         second_model = build_model(config)
         first_hash = state_dict_hash(first_model.state_dict())
@@ -214,6 +225,9 @@ def run_preflight(config: ExperimentConfig, device: torch.device) -> dict[str, A
                 f"CPU/MPS logit parity failed: max delta {maximum_delta:.6g}, atol=rtol={atol}"
             )
         del first_model
+        status(
+            "Preflight: checking PGD-5, BatchNorm state, gradients, and memory...", enabled=progress
+        )
         pixels_mps = pixels.to(device=device, dtype=torch.float32)
         labels_mps = labels.to(device=device, dtype=torch.long)
         mps_model.train()
@@ -319,6 +333,7 @@ def run_preflight(config: ExperimentConfig, device: torch.device) -> dict[str, A
             "elapsed_seconds": time.perf_counter() - started,
         }
         atomic_write_json(config.project_path("artifacts") / "preflight.json", result)
+        status("Preflight passed: the locked MPS experiment may train.", enabled=progress)
         return result
     except BaseException as error:
         record_failure(failure, "preflight", error, {"device": str(device)})

@@ -16,6 +16,7 @@ from src.io_utils import (
     source_hash,
     utc_now,
 )
+from src.progress import status
 from src.training import checkpoint_path, experiment_provenance
 
 
@@ -262,8 +263,8 @@ def _release_files(config: ExperimentConfig) -> list[Path]:
     files: list[Path] = [
         config.root / "README.md",
         config.root / "pyproject.toml",
-        config.root / "requirements.in",
-        config.root / "requirements-macos-arm64-py313.lock.txt",
+        config.root / "requirements.txt",
+        config.root / "setup_venv.sh",
     ]
     for root in roots:
         if root.is_dir():
@@ -274,7 +275,8 @@ def _release_files(config: ExperimentConfig) -> list[Path]:
     )
 
 
-def report(config: ExperimentConfig) -> dict[str, Any]:
+def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
+    status("Report: loading verified evaluation and representation evidence...", enabled=progress)
     evaluation = _load(config.project_path("results") / "evaluation.json")
     representations = _load(config.project_path("results") / "representations.json")
     if evaluation.get("config_sha256") != config.sha256:
@@ -324,4 +326,7 @@ def report(config: ExperimentConfig) -> dict[str, Any]:
     }
     manifest_path = config.project_path("artifacts") / "release" / "local-release-manifest.json"
     atomic_write_json(manifest_path, manifest)
+    status(
+        "Report complete: local reports and the release manifest were written.", enabled=progress
+    )
     return {**summary, "local_release_manifest": str(manifest_path)}

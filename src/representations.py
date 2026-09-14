@@ -32,6 +32,7 @@ from src.metrics import (
     stratified_primary_bootstrap,
 )
 from src.model import load_checkpoint_model
+from src.progress import status, tqdm
 from src.training import Arm, checkpoint_path
 
 FloatArray = NDArray[np.float64]
@@ -240,6 +241,8 @@ def _projection_group(
     arm: Arm,
     values: dict[str, dict[str, np.ndarray[Any, Any]]],
     projection_ids: set[str],
+    *,
+    progress: bool,
 ) -> tuple[dict[str, Any], PCA]:
     import umap
 
@@ -261,6 +264,7 @@ def _projection_group(
     seed = config.integer("representations", "projection_seed")
     figure_root = config.project_path("figures") / "projections"
     coordinate_root = config.project_path("results") / "projection_coordinates"
+    status(f"Represent: {arm} — fitting calibration PCA.", enabled=progress)
     pca = PCA(n_components=2, svd_solver="full")
     pca.fit(calibration["features"].astype(np.float64))
     pca_clean = pca.transform(clean)
@@ -274,6 +278,7 @@ def _projection_group(
         figure_root / f"pca-{arm}.png",
     )
     joint = np.concatenate([clean, shifted], axis=0)
+    status(f"Represent: {arm} — fitting joint clean/PGD t-SNE.", enabled=progress)
     tsne = TSNE(
         n_components=2,
         init="pca",
@@ -293,6 +298,7 @@ def _projection_group(
         f"t-SNE — {arm} model (joint clean + PGD fit)",
         figure_root / f"tsne-{arm}.png",
     )
+    status(f"Represent: {arm} — fitting and transforming calibration UMAP.", enabled=progress)
     reducer = umap.UMAP(
         n_components=2,
         n_neighbors=config.integer("representations", "umap_neighbours"),
@@ -476,7 +482,11 @@ def _error_taxonomy(
     return output
 
 
-def represent(config: ExperimentConfig) -> dict[str, Any]:
+def represent(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
+    status(
+        "Represent: loading aligned 512-D features for both fixed model arms...",
+        enabled=progress,
+    )
     arm_names: tuple[Arm, Arm] = ("standard", "adversarial")
     splits = load_registered_splits(config)
     projection_ids = {item.sample_id for item in splits["projection"]}
@@ -489,12 +499,21 @@ def represent(config: ExperimentConfig) -> dict[str, Any]:
     aligned: dict[Arm, dict[str, np.ndarray[Any, Any]]] = {}
     projections: dict[Arm, dict[str, Any]] = {}
     pcas: dict[Arm, PCA] = {}
-    for arm in arm_names:
+    for arm in tqdm(
+        arm_names,
+        desc="representation arms",
+        unit="arm",
+        disable=not progress,
+    ):
+        status(f"Represent: {arm} — quantitative geometry.", enabled=progress)
         geometry[arm], aligned[arm] = _arm_geometry(config, both[arm])
         atomic_save_npz(
             config.project_path("results") / f"representation-samples-{arm}.npz", aligned[arm]
         )
-        projections[arm], pcas[arm] = _projection_group(config, arm, both[arm], projection_ids)
+        projections[arm], pcas[arm] = _projection_group(
+            config, arm, both[arm], projection_ids, progress=progress
+        )
+    status("Represent: class-stratified primary bootstrap.", enabled=progress)
     labels = aligned["standard"]["labels"].astype(np.int64)
     primary = stratified_primary_bootstrap(
         labels,
@@ -508,6 +527,7 @@ def represent(config: ExperimentConfig) -> dict[str, Any]:
     pair_first, pair_second, pair_record = _select_difficult_pair(
         both, config.integer("dataset", "classes")
     )
+    status("Represent: exact difficult-pair boundaries and geometry charts.", enabled=progress)
     boundaries = {
         arm: _boundary_figure(config, arm, both[arm], pcas[arm], (pair_first, pair_second))
         for arm in arm_names
@@ -540,5 +560,9 @@ def represent(config: ExperimentConfig) -> dict[str, Any]:
     atomic_write_json(
         config.project_path("artifacts") / "representations" / "figures.json",
         {"created_at": utc_now(), "figure_sha256": figure_hashes},
+    )
+    status(
+        "Represent complete: quantitative results and projection figures are registered.",
+        enabled=progress,
     )
     return result

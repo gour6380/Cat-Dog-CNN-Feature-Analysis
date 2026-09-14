@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Literal, cast
@@ -11,8 +12,12 @@ from typing import Literal, cast
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Apply the no-fallback policy before importing modules that load PyTorch.
+os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
+
 from src.config import ExperimentConfig, load_config
 from src.io_utils import atomic_write_json, utc_now
+from src.progress import status, tqdm
 from src.runtime import record_failure, require_device
 
 Command = Literal["setup", "preflight", "train", "evaluate", "represent", "report", "reproduce"]
@@ -26,43 +31,47 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("setup", "represent", "report"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
+        command.add_argument("--no-progress", action="store_true")
     for name in ("preflight", "evaluate", "reproduce"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--device", required=True, choices=("mps", "cpu"))
+        command.add_argument("--no-progress", action="store_true")
     train = subparsers.add_parser("train")
     train.add_argument("--config", required=True, type=Path)
     train.add_argument("--arm", required=True, choices=("standard", "adversarial"))
+    train.add_argument("--no-progress", action="store_true")
     return parser
 
 
 def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -> object:
+    progress = not bool(args.no_progress)
     if command == "setup":
         from src.setup_stage import setup_experiment
 
-        return setup_experiment(config)
+        return setup_experiment(config, progress=progress)
     if command == "preflight":
         from src.preflight import run_preflight
 
-        return run_preflight(config, require_device(cast(str, args.device)))
+        return run_preflight(config, require_device(cast(str, args.device)), progress=progress)
     if command == "train":
         from src.training import train_arm
 
         locked_device = config.value("training", "device", str)
         arm = cast(Literal["standard", "adversarial"], args.arm)
-        return train_arm(config, arm, require_device(locked_device))
+        return train_arm(config, arm, require_device(locked_device), progress=progress)
     if command == "evaluate":
         from src.evaluation import evaluate
 
-        return evaluate(config, require_device(cast(str, args.device)))
+        return evaluate(config, require_device(cast(str, args.device)), progress=progress)
     if command == "represent":
         from src.representations import represent
 
-        return represent(config)
+        return represent(config, progress=progress)
     if command == "report":
         from src.reporting import report
 
-        return report(config)
+        return report(config, progress=progress)
     if command == "reproduce":
         from src.evaluation import evaluate
         from src.preflight import run_preflight
@@ -73,15 +82,29 @@ def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -
 
         device = require_device(cast(str, args.device))
         stages: dict[str, object] = {}
-        stages["setup"] = setup_experiment(config)
-        stages["preflight"] = run_preflight(config, device)
-        stages["train_standard"] = train_arm(config, "standard", device)
-        stages["train_adversarial"] = train_arm(config, "adversarial", device)
-        stages["evaluate"] = evaluate(config, device)
-        stages["represent"] = represent(config)
-        stages["report"] = report(config)
+        status("Reproduce: starting the seven registered Week 3 stages...", enabled=progress)
+        with tqdm(
+            total=7, desc="reproduce stages", unit="stage", disable=not progress
+        ) as stage_bar:
+            stages["setup"] = setup_experiment(config, progress=progress)
+            stage_bar.update(1)
+            stages["preflight"] = run_preflight(config, device, progress=progress)
+            stage_bar.update(1)
+            stages["train_standard"] = train_arm(config, "standard", device, progress=progress)
+            stage_bar.update(1)
+            stages["train_adversarial"] = train_arm(
+                config, "adversarial", device, progress=progress
+            )
+            stage_bar.update(1)
+            stages["evaluate"] = evaluate(config, device, progress=progress)
+            stage_bar.update(1)
+            stages["represent"] = represent(config, progress=progress)
+            stage_bar.update(1)
+            stages["report"] = report(config, progress=progress)
+            stage_bar.update(1)
         result = {"status": "complete", "created_at": utc_now(), "stages": stages}
         atomic_write_json(config.project_path("artifacts") / "reproduction.json", result)
+        status("Reproduce complete: all seven stages passed.", enabled=progress)
         return result
     raise AssertionError(f"unhandled command: {command}")
 

@@ -18,7 +18,15 @@ from src.config import ExperimentConfig
 from src.data import build_loader, epoch_order, load_registered_splits
 from src.io_utils import atomic_write_json, canonical_json_bytes, sha256_bytes, utc_now
 from src.model import NormalizedResNet18, atomic_torch_save, build_model, state_dict_hash
-from src.runtime import SafetyStop, ensure_finite, ensure_memory, memory_snapshot, record_failure
+from src.progress import status, tqdm
+from src.runtime import (
+    SafetyStop,
+    ensure_finite,
+    ensure_memory,
+    memory_snapshot,
+    record_failure,
+    synchronize,
+)
 
 Arm = Literal["standard", "adversarial"]
 
@@ -171,11 +179,21 @@ def _assert_finite_gradients(model: nn.Module) -> float:
     return norm
 
 
-def train_arm(config: ExperimentConfig, arm: Arm, device: torch.device) -> dict[str, Any]:
+def train_arm(
+    config: ExperimentConfig,
+    arm: Arm,
+    device: torch.device,
+    *,
+    progress: bool = True,
+) -> dict[str, Any]:
     """Train or resume one fixed arm without inspecting the test partition."""
 
     failure = config.project_path("artifacts") / "failures" / f"train-{arm}.json"
     try:
+        status(
+            f"{arm}: validating memory and provenance before locked MPS training...",
+            enabled=progress,
+        )
         minimum_memory = config.number("preflight", "minimum_available_memory_gib")
         start_memory = ensure_memory(device, minimum_memory)
         splits = load_registered_splits(config)
@@ -193,6 +211,10 @@ def train_arm(config: ExperimentConfig, arm: Arm, device: torch.device) -> dict[
         )
         epochs = config.integer("training", "epochs")
         if resumed_epoch >= epochs:
+            status(
+                f"{arm}: reusing the verified epoch-{resumed_epoch} checkpoint.",
+                enabled=progress,
+            )
             return {
                 "status": "complete",
                 "arm": arm,
@@ -230,88 +252,127 @@ def train_arm(config: ExperimentConfig, arm: Arm, device: torch.device) -> dict[
             config.number("training", "head_learning_rate"),
         ]
         started = time.perf_counter()
-        for epoch in range(resumed_epoch + 1, epochs + 1):
-            epoch_started = time.perf_counter()
-            ordered = epoch_order(training_records, config.integer("training", "data_seed"), epoch)
-            loader = build_loader(training_records, config, training=True, epoch=epoch)
-            model.train()
-            optimizer.zero_grad(set_to_none=True)
-            running_loss = 0.0
-            sample_count = 0
-            last_gradient_norm = 0.0
-            last_lrs = base_lrs
-            for batch_index, batch in enumerate(loader, 1):
-                pixels, labels, sample_ids_raw, _species = batch
-                sample_ids = list(sample_ids_raw)
-                pixels = pixels.to(device=device, dtype=torch.float32)
-                labels = labels.to(device=device, dtype=torch.long)
-                if arm == "adversarial":
-                    attack_ids = [f"{sample_id}:epoch:{epoch}" for sample_id in sample_ids]
-                    pixels = pgd_attack(model, pixels, labels, attack_ids, attack_spec).adversarial
-                logits = model(pixels)
-                ensure_finite("training logits", logits)
-                loss = nnf.cross_entropy(logits, labels)
-                ensure_finite("training loss", loss)
-                (loss / accumulation).backward()  # type: ignore[no-untyped-call]
-                running_loss += float(loss.detach().item()) * len(labels)
-                sample_count += len(labels)
-                if batch_index % accumulation == 0:
-                    last_gradient_norm = _assert_finite_gradients(model)
-                    next_update = completed_updates + 1
-                    last_lrs = _set_learning_rates(
-                        optimizer, config, next_update, warmup_updates, total_updates
-                    )
-                    optimizer.step()
-                    optimizer.zero_grad(set_to_none=True)
-                    completed_updates = next_update
-            if completed_updates != epoch * updates_per_epoch:
-                raise SafetyStop("optimizer-update count diverged from registered schedule")
-            epoch_record = {
-                "epoch": epoch,
-                "mean_training_loss": running_loss / sample_count,
-                "sample_count": sample_count,
-                "update_count": completed_updates,
-                "order_sha256": _order_hash(ordered),
-                "last_gradient_norm": last_gradient_norm,
-                "last_learning_rates": last_lrs,
-                "seconds": time.perf_counter() - epoch_started,
-                "memory": memory_snapshot(device),
-            }
-            history.append(epoch_record)
-            checkpoint = {
-                "schema_version": 1,
-                "saved_at": utc_now(),
-                "arm": arm,
-                "epoch": epoch,
-                "update_count": completed_updates,
-                "provenance": provenance,
-                "model_state": model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "history": history,
-            }
-            atomic_torch_save(checkpoint_path(config, arm, epoch), checkpoint)
-            atomic_write_json(
-                config.project_path("artifacts") / "training" / f"{arm}.json",
-                {
-                    "status": "running" if epoch < epochs else "complete",
+        remaining_epochs = epochs - resumed_epoch
+        status(
+            f"{arm}: starting {remaining_epochs} remaining epoch(s), "
+            f"{batches_per_epoch} batches per epoch on {device.type}.",
+            enabled=progress,
+        )
+        with tqdm(
+            range(resumed_epoch + 1, epochs + 1),
+            total=remaining_epochs,
+            desc=f"{arm} epochs",
+            unit="epoch",
+            disable=not progress,
+        ) as epoch_bar:
+            for epoch in epoch_bar:
+                epoch_started = time.perf_counter()
+                status(f"{arm} — epoch {epoch}/{epochs}: training", enabled=progress)
+                ordered = epoch_order(
+                    training_records, config.integer("training", "data_seed"), epoch
+                )
+                loader = build_loader(training_records, config, training=True, epoch=epoch)
+                model.train()
+                optimizer.zero_grad(set_to_none=True)
+                running_loss = 0.0
+                sample_count = 0
+                last_gradient_norm = 0.0
+                last_lrs = base_lrs
+                with tqdm(
+                    loader,
+                    total=len(loader),
+                    desc=f"{arm} epoch {epoch}",
+                    unit="batch",
+                    leave=False,
+                    disable=not progress,
+                ) as batch_bar:
+                    for batch_index, batch in enumerate(batch_bar, 1):
+                        pixels, labels, sample_ids_raw, _species = batch
+                        sample_ids = list(sample_ids_raw)
+                        pixels = pixels.to(device=device, dtype=torch.float32)
+                        labels = labels.to(device=device, dtype=torch.long)
+                        if arm == "adversarial":
+                            attack_ids = [f"{sample_id}:epoch:{epoch}" for sample_id in sample_ids]
+                            pixels = pgd_attack(
+                                model, pixels, labels, attack_ids, attack_spec
+                            ).adversarial
+                        logits = model(pixels)
+                        ensure_finite("training logits", logits)
+                        loss = nnf.cross_entropy(logits, labels)
+                        ensure_finite("training loss", loss)
+                        (loss / accumulation).backward()  # type: ignore[no-untyped-call]
+                        running_loss += float(loss.detach().item()) * len(labels)
+                        sample_count += len(labels)
+                        if batch_index % accumulation == 0:
+                            last_gradient_norm = _assert_finite_gradients(model)
+                            next_update = completed_updates + 1
+                            last_lrs = _set_learning_rates(
+                                optimizer, config, next_update, warmup_updates, total_updates
+                            )
+                            optimizer.step()
+                            optimizer.zero_grad(set_to_none=True)
+                            completed_updates = next_update
+                        batch_bar.set_postfix(
+                            loss=f"{running_loss / sample_count:.4f}",
+                            updates=completed_updates,
+                        )
+                if completed_updates != epoch * updates_per_epoch:
+                    raise SafetyStop("optimizer-update count diverged from registered schedule")
+                synchronize(device)
+                mean_loss = running_loss / sample_count
+                epoch_record = {
+                    "epoch": epoch,
+                    "mean_training_loss": mean_loss,
+                    "sample_count": sample_count,
+                    "update_count": completed_updates,
+                    "order_sha256": _order_hash(ordered),
+                    "last_gradient_norm": last_gradient_norm,
+                    "last_learning_rates": last_lrs,
+                    "seconds": time.perf_counter() - epoch_started,
+                    "memory": memory_snapshot(device),
+                }
+                history.append(epoch_record)
+                checkpoint = {
+                    "schema_version": 1,
+                    "saved_at": utc_now(),
                     "arm": arm,
+                    "epoch": epoch,
+                    "update_count": completed_updates,
                     "provenance": provenance,
-                    "initialization_sha256": initialization_hash,
-                    "completed_epochs": epoch,
-                    "completed_updates": completed_updates,
-                    "updates_per_epoch": updates_per_epoch,
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
                     "history": history,
-                    "checkpoint": str(checkpoint_path(config, arm, epoch)),
-                    "started_from_epoch": resumed_epoch,
-                    "elapsed_this_invocation_seconds": time.perf_counter() - started,
-                    "start_memory": start_memory,
-                    "current_memory": memory_snapshot(device),
-                },
-            )
-            ensure_memory(device, minimum_memory)
+                }
+                atomic_torch_save(checkpoint_path(config, arm, epoch), checkpoint)
+                atomic_write_json(
+                    config.project_path("artifacts") / "training" / f"{arm}.json",
+                    {
+                        "status": "running" if epoch < epochs else "complete",
+                        "arm": arm,
+                        "provenance": provenance,
+                        "initialization_sha256": initialization_hash,
+                        "completed_epochs": epoch,
+                        "completed_updates": completed_updates,
+                        "updates_per_epoch": updates_per_epoch,
+                        "history": history,
+                        "checkpoint": str(checkpoint_path(config, arm, epoch)),
+                        "started_from_epoch": resumed_epoch,
+                        "elapsed_this_invocation_seconds": time.perf_counter() - started,
+                        "start_memory": start_memory,
+                        "current_memory": memory_snapshot(device),
+                    },
+                )
+                epoch_bar.set_postfix(loss=f"{mean_loss:.4f}", updates=completed_updates)
+                status(
+                    f"{arm} — epoch {epoch}/{epochs} complete: loss={mean_loss:.4f}, "
+                    f"backbone_lr={last_lrs[0]:.3e}, head_lr={last_lrs[1]:.3e}, "
+                    f"updates={completed_updates}, seconds={epoch_record['seconds']:.1f}.",
+                    enabled=progress,
+                )
+                ensure_memory(device, minimum_memory)
         standard_orders = [item["order_sha256"] for item in history]
         order_protocol_hash = sha256_bytes(canonical_json_bytes(standard_orders))
-        return {
+        result = {
             "status": "complete",
             "arm": arm,
             "checkpoint": str(checkpoint_path(config, arm)),
@@ -321,6 +382,12 @@ def train_arm(config: ExperimentConfig, arm: Arm, device: torch.device) -> dict[
             "resumed_from_epoch": resumed_epoch,
             "elapsed_seconds": time.perf_counter() - started,
         }
+        status(
+            f"{arm}: training complete at fixed epoch {epochs}; checkpoint is registered.",
+            enabled=progress,
+        )
+        return result
     except BaseException as error:
         record_failure(failure, f"train:{arm}", error, {"arm": arm, "device": str(device)})
+        status(f"{arm}: training stopped — {error}", enabled=progress)
         raise

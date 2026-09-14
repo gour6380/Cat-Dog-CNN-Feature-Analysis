@@ -34,13 +34,13 @@ copy is [`configs/experiment.yaml`](configs/experiment.yaml).
 The supported runtime is native ARM64 CPython 3.13.15. From this directory:
 
 ```bash
-/opt/homebrew/bin/python3.13 -m venv .venv
-.venv/bin/python -m pip install --require-hashes -r requirements-macos-arm64-py313.lock.txt
+./setup_venv.sh
 ```
 
-The lock is generated only from `requirements.in` on the recorded platform. Dataset,
-weights, checkpoints, photographs, per-sample arrays, and generated outputs are local
-and Git-ignored.
+The setup script uses the standard-library `venv` module and pip with the fully pinned
+`requirements.txt`; uv is not used. To install from the ignored local wheel cache, use
+`./setup_venv.sh --offline`. Dataset, weights, checkpoints, photographs, per-sample
+arrays, and generated outputs are local and Git-ignored.
 
 ## Typed command interface
 
@@ -55,6 +55,11 @@ python src/cli.py reproduce  --config configs/experiment.yaml --device mps
 ```
 
 Use `.venv/bin/python` in place of `python` unless the environment is activated.
+Every command accepts `--no-progress`. Training shows nested tqdm epoch and batch bars
+plus a durable epoch summary; setup, preflight, evaluation, representation analysis, and
+reporting print explicit stage status. Disabling progress changes only rendering, never
+the saved numerical evidence.
+
 `reproduce` reuses only artifacts whose recorded configuration, data, model, and
 initialization hashes match. It never silently reduces resolution, epochs, PGD steps,
 or restarts. Unsafe memory pressure, MPS OOM, invalid attacks, and non-finite values

@@ -21,6 +21,7 @@ from src.data import SampleRecord, build_loader, load_registered_splits
 from src.io_utils import atomic_save_npz, atomic_write_json, sha256_file, utc_now
 from src.metrics import accuracy_metrics
 from src.model import NormalizedResNet18, load_checkpoint_model
+from src.progress import status, tqdm
 from src.runtime import ensure_finite, ensure_memory, memory_snapshot, record_failure, synchronize
 from src.training import Arm, checkpoint_path, experiment_provenance
 
@@ -79,6 +80,9 @@ def _collect_clean_or_shift(
     config: ExperimentConfig,
     device: torch.device,
     transform: BatchTransform | None = None,
+    *,
+    progress: bool = False,
+    description: str = "evaluation",
 ) -> dict[str, np.ndarray[Any, Any]]:
     logits_parts: list[np.ndarray[Any, Any]] = []
     feature_parts: list[np.ndarray[Any, Any]] = []
@@ -87,7 +91,14 @@ def _collect_clean_or_shift(
     ids: list[str] = []
     loader = build_loader(records, config, training=False)
     model.eval()
-    for pixels, labels, sample_ids_raw, species in loader:
+    for pixels, labels, sample_ids_raw, species in tqdm(
+        loader,
+        total=len(loader),
+        desc=description,
+        unit="batch",
+        leave=False,
+        disable=not progress,
+    ):
         sample_ids = list(sample_ids_raw)
         pixels = pixels.to(device=device, dtype=torch.float32)
         if transform is not None:
@@ -116,6 +127,9 @@ def _collect_attack(
     config: ExperimentConfig,
     device: torch.device,
     kind: str,
+    *,
+    progress: bool = False,
+    description: str = "attack evaluation",
 ) -> dict[str, np.ndarray[Any, Any]]:
     logits_parts: list[np.ndarray[Any, Any]] = []
     feature_parts: list[np.ndarray[Any, Any]] = []
@@ -124,7 +138,14 @@ def _collect_attack(
     cumulative_parts: list[list[np.ndarray[Any, Any]]] | None = None
     ids: list[str] = []
     loader = build_loader(records, config, training=False)
-    for pixels, labels, sample_ids_raw, species in loader:
+    for pixels, labels, sample_ids_raw, species in tqdm(
+        loader,
+        total=len(loader),
+        desc=description,
+        unit="batch",
+        leave=False,
+        disable=not progress,
+    ):
         sample_ids = list(sample_ids_raw)
         pixels = pixels.to(device=device, dtype=torch.float32)
         labels_device = labels.to(device=device, dtype=torch.long)
@@ -266,10 +287,16 @@ def _policy_from_calibration(
     )
 
 
-def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
+def evaluate(
+    config: ExperimentConfig, device: torch.device, *, progress: bool = True
+) -> dict[str, Any]:
     failure = config.project_path("artifacts") / "failures" / "evaluate.json"
     started = time.perf_counter()
     try:
+        status(
+            f"Evaluation: checking fixed checkpoints and running on {device.type}...",
+            enabled=progress,
+        )
         ensure_memory(device, config.number("preflight", "minimum_available_memory_gib"))
         splits = load_registered_splits(config)
         conditions = registered_corruptions(config.section("corruptions"))
@@ -281,7 +308,14 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
             "arms": {},
             "finite_attack_scope": "FGSM and PGD-20x5 at L-infinity epsilon 4/255",
         }
-        for arm in ("standard", "adversarial"):
+        arm_names: tuple[Arm, Arm] = ("standard", "adversarial")
+        for arm in tqdm(
+            arm_names,
+            desc="evaluation arms",
+            unit="arm",
+            disable=not progress,
+        ):
+            status(f"Evaluation: {arm} arm — calibration and clean test.", enabled=progress)
             selected_checkpoint = checkpoint_path(config, arm)
             if not selected_checkpoint.is_file():
                 raise EvaluationError(
@@ -294,8 +328,13 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
             calibration = _get_or_compute(
                 calibration_path,
                 provenance,
-                lambda selected_model=model_for_arm: _collect_clean_or_shift(  # type: ignore[misc]
-                    selected_model, splits["calibration"], config, device
+                lambda selected_model=model_for_arm, selected_arm=arm: _collect_clean_or_shift(  # type: ignore[misc]
+                    selected_model,
+                    splits["calibration"],
+                    config,
+                    device,
+                    progress=progress,
+                    description=f"{selected_arm} calibration",
                 ),
                 {"partition": "calibration", "condition": "clean"},
             )
@@ -322,8 +361,13 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
             clean_full = _get_or_compute(
                 clean_path,
                 provenance,
-                lambda selected_model=model_for_arm: _collect_clean_or_shift(  # type: ignore[misc]
-                    selected_model, splits["test"], config, device
+                lambda selected_model=model_for_arm, selected_arm=arm: _collect_clean_or_shift(  # type: ignore[misc]
+                    selected_model,
+                    splits["test"],
+                    config,
+                    device,
+                    progress=progress,
+                    description=f"{selected_arm} clean test",
                 ),
                 {"partition": "official test", "condition": "clean"},
             )
@@ -339,12 +383,20 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
                 config.integer("calibration", "ece_bins"),
             )
             arm_result["full_test"]["clean"] = clean_metrics
-            for corruption in conditions:
+            status(f"Evaluation: {arm} arm — registered corruptions.", enabled=progress)
+            for corruption in tqdm(
+                conditions,
+                desc=f"{arm} corruptions",
+                unit="condition",
+                leave=False,
+                disable=not progress,
+            ):
                 condition_path = _arrays_path(config, f"full-test/{arm}", corruption.identifier)
 
                 def compute_shift(
                     selected: Corruption = corruption,
                     selected_model: NormalizedResNet18 = model_for_arm,
+                    selected_arm: Arm = arm,
                 ) -> dict[str, np.ndarray[Any, Any]]:
                     return _collect_clean_or_shift(
                         selected_model,
@@ -357,6 +409,8 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
                             selected,
                             config.integer("attack", "evaluation_seed"),
                         ),
+                        progress=progress,
+                        description=f"{selected_arm} {selected.identifier}",
                     )
 
                 shifted = _get_or_compute(
@@ -379,26 +433,54 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
             attack_clean = _get_or_compute(
                 attack_clean_path,
                 provenance,
-                lambda selected_model=model_for_arm: _collect_clean_or_shift(  # type: ignore[misc]
-                    selected_model, splits["attack"], config, device
+                lambda selected_model=model_for_arm, selected_arm=arm: _collect_clean_or_shift(  # type: ignore[misc]
+                    selected_model,
+                    splits["attack"],
+                    config,
+                    device,
+                    progress=progress,
+                    description=f"{selected_arm} clean attack subset",
                 ),
                 {"partition": "fixed 20-per-breed test subset", "condition": "clean"},
             )
-            for attack_name in ("fgsm", "pgd20x5"):
-                attack_path = _arrays_path(config, f"attack/{arm}", attack_name)
+            status(f"Evaluation: {arm} arm — FGSM and PGD-20×5.", enabled=progress)
+            for attack_name in tqdm(
+                ("fgsm", "pgd20x5"),
+                desc=f"{arm} attacks",
+                unit="attack",
+                leave=False,
+                disable=not progress,
+            ):
+                selected_attack = cast(str, attack_name)
+                selected_arm = cast(Arm, arm)
+                attack_path = _arrays_path(config, f"attack/{selected_arm}", selected_attack)
+
+                def compute_attack(
+                    selected: str = selected_attack,
+                    selected_model: NormalizedResNet18 = model_for_arm,
+                    arm_label: Arm = selected_arm,
+                ) -> dict[str, np.ndarray[Any, Any]]:
+                    return _collect_attack(
+                        selected_model,
+                        splits["attack"],
+                        config,
+                        device,
+                        selected,
+                        progress=progress,
+                        description=f"{arm_label} {selected}",
+                    )
+
                 attacked = _get_or_compute(
                     attack_path,
                     provenance,
-                    lambda selected=attack_name, selected_model=model_for_arm: _collect_attack(  # type: ignore[misc]
-                        selected_model, splits["attack"], config, device, selected
-                    ),
+                    compute_attack,
                     {
                         "partition": "fixed 20-per-breed test subset",
-                        "condition": attack_name,
+                        "condition": selected_attack,
                         "finite_attack": True,
                     },
                 )
-                arm_result["attack_subset"][attack_name] = _attack_metrics(
+                arm_result["attack_subset"][selected_attack] = _attack_metrics(
                     attack_clean, attacked, classes
                 )
             fgsm_robust = arm_result["attack_subset"]["fgsm"]["robust_accuracy"]
@@ -409,6 +491,7 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
                 "pgd20x5_robust_accuracy": pgd_robust,
             }
             all_results["arms"][arm] = arm_result
+            status(f"Evaluation: {arm} arm complete.", enabled=progress)
             model_for_arm.to("cpu")
             gc.collect()
             if device.type == "mps":
@@ -438,7 +521,9 @@ def evaluate(config: ExperimentConfig, device: torch.device) -> dict[str, Any]:
         all_results["final_memory"] = memory_snapshot(device)
         destination = config.project_path("results") / "evaluation.json"
         atomic_write_json(destination, all_results)
+        status("Evaluation complete: aligned metrics and arrays are registered.", enabled=progress)
         return all_results
     except BaseException as error:
         record_failure(failure, "evaluate", error, {"device": str(device)})
+        status(f"Evaluation stopped — {error}", enabled=progress)
         raise

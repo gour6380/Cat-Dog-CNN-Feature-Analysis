@@ -22,17 +22,21 @@ def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed % (2**32))
     torch.manual_seed(seed)
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
 
 
 def require_device(name: str) -> torch.device:
     """Select the requested device without any scientific fallback."""
 
     if name == "mps":
+        if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") not in (None, "0"):
+            raise SafetyStop("PYTORCH_ENABLE_MPS_FALLBACK must be 0 for scientific runs")
+        os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
         if not torch.backends.mps.is_built() or not torch.backends.mps.is_available():
             raise SafetyStop(
                 "MPS was requested but is not built and available; fallback is forbidden"
             )
-        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "0")
         return torch.device("mps")
     if name == "cpu":
         return torch.device("cpu")
