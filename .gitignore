@@ -1,0 +1,25 @@
+.DS_Store
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+
+# Private or reproducible experiment material
+data/
+weights/
+checkpoints/
+.local/
+artifacts/
+results/*.npz
+results/per_sample/
+figures/local/
+reports/local/
+
+# Generated public-ready outputs are intentionally reviewed before tracking.
+figures/generated/
+results/generated/
+reports/generated/
