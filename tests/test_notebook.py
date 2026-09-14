@@ -55,6 +55,8 @@ def test_source_notebook_is_valid_ordered_and_output_free() -> None:
     assert all(cell.execution_count is None and cell.outputs == [] for cell in code_cells)
     source = "\n".join(cell.source for cell in notebook.cells)
     assert "run_stage(" in source
+    assert "generate_eda(config)" in source
+    assert '"split_and_species", "breed_balance", "image_geometry"' in source
     assert "def build_model" not in source
     assert "def pgd" not in source
     assert "optimizer.step" not in source

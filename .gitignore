@@ -7,6 +7,25 @@ __pycache__/
 *.py[cod]
 .coverage
 htmlcov/
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+*.log
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.npy
+*.npz
+*.sqlite*
+*.whl
+*.zip
+build/
+dist/
+*.egg-info/
 
 # Private or reproducible experiment material
 data/

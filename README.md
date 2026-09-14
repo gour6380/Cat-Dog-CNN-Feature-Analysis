@@ -1,5 +1,7 @@
 # Adversarial Representation Drift in Fine-Grained Pet Recognition
 
+[Results](docs/results.md) ·
+[Visual explanation](notebooks/oxford_pets_results_explained.ipynb) ·
 [Protocol](docs/PROTOCOL.md) · [Configuration](configs/experiment.yaml) ·
 [Guided notebook](notebooks/oxford_pets_adversarial_representations.ipynb) ·
 [Source](src/) · [Tests](tests/)
@@ -13,6 +15,46 @@ projection.
 The claim boundary is deliberately narrow: the study can support representation
 retention under a fixed digital `L∞` attack. It cannot establish physical robustness,
 safe pet recognition, out-of-distribution detection, or production readiness.
+
+**Status:** the matched 15-epoch experiment completed on PyTorch MPS. The registered
+representation hypothesis passed. PGD-5 fine-tuning preserved substantially more
+penultimate structure and improved finite-attack robust accuracy, while reducing clean
+and corruption accuracy. This is one model pair and one split/seed family.
+
+## Completed results
+
+| Metric | Standard | PGD-trained |
+|---|---:|---:|
+| Clean accuracy, full official test | 89.15% | 72.91% |
+| FGSM robust accuracy, 740-image subset | 2.84% | 31.08% |
+| PGD-20×5 robust accuracy, 740-image subset | 0.00% | 20.68% |
+| PGD attack success among clean-correct images | 100.00% | 71.51% |
+| Median clean-to-PGD cosine feature drift | 0.4531 | 0.0378 |
+| PGD five-NN breed retention | 0.11% | 25.62% |
+| PGD five-NN accuracy | 0.00% | 27.57% |
+| Clean-to-PGD linear CKA | 0.1669 | 0.8627 |
+
+The adversarial-minus-standard median-drift difference was `-0.415384`, with a
+class-stratified 95% bootstrap interval of `[-0.423403, -0.408943]`. The neighbour-
+retention difference was `+25.51` percentage points, interval `[23.54, 27.62]`. Both
+registered signs passed. These intervals cover paired test-sample uncertainty, not
+variation from retraining.
+
+| Paired feature drift | Per-breed neighbour retention |
+|---|---|
+| ![Distribution of paired cosine feature drift](docs/assets/cosine-drift.png) | ![Five-nearest-neighbour breed retention by breed](docs/assets/knn-retention-by-breed.png) |
+
+The standard model had higher absolute accuracy on every registered noise, blur,
+brightness, and contrast condition. Clean-fitted 90%-coverage confidence policies also
+moved outside their registered coverage/risk tolerances after at least one shift for both
+arms. Lower clean ECE for the adversarial model did not compensate for its higher task
+error or selective risk.
+
+Read the [complete aggregate result page](docs/results.md), the
+[machine-readable values](docs/results.json), or the
+[self-contained visual explanation notebook](notebooks/oxford_pets_results_explained.ipynb).
+The notebook has no code cells: it embeds thirteen aggregate EDA, geometry, PCA, t-SNE,
+UMAP, and boundary figures and can be read directly on GitHub without running anything.
 
 ## Reference protocol
 
@@ -51,8 +93,10 @@ The supported runtime is native ARM64 CPython 3.13.15. From this directory:
 
 The setup script uses the standard-library `venv` module and pip with the fully pinned
 `requirements.txt`; uv is not used. To install from the ignored local wheel cache, use
-`./setup_venv.sh --offline`. Dataset, weights, checkpoints, photographs, per-sample
-arrays, and generated outputs are local and Git-ignored.
+`./setup_venv.sh --offline`. Dataset files, weights, checkpoints, photographs, logits,
+features, per-sample arrays, and run manifests remain local and Git-ignored. The reviewed
+aggregate result page, result JSON, figures, reports, and visual notebook are shareable
+snapshots rather than substitutes for an independent reproduction.
 
 ## Typed command interface
 
@@ -116,6 +160,30 @@ output-free. Regenerate the canonical guide after editing its builder with:
 .venv/bin/python scripts/build_notebook.py
 ```
 
+### Visual results companion
+
+After a matching experiment completes, `scripts/build_results_notebook.py` creates
+`notebooks/oxford_pets_results_explained.ipynb`: a read-only explanation with thirteen
+embedded aggregate figures. Three cover EDA and ten cover geometry, PCA, t-SNE, UMAP,
+and boundary views. The repository includes the reviewed 15-epoch snapshot; rebuilding it
+requires matching local evidence and does not run a model or an attack.
+
+```bash
+.venv/bin/python scripts/build_results_notebook.py --force
+```
+
+The builder verifies the configuration identity plus saved result, training, release,
+EDA, and figure hashes before embedding anything. Run it only after the notebook's report
+stage completes. EDA reads registered split metadata and source-image headers only. It
+includes no original pet photographs.
+
+The GitHub-facing aggregate page, JSON, selected figures, and tracked reports are also
+presentation-only exports from the same evidence:
+
+```bash
+.venv/bin/python scripts/build_public_results.py
+```
+
 ## Evidence lifecycle
 
 `setup` records the official split and hashes. `preflight` runs data, attack, parity,
@@ -129,13 +197,33 @@ Sunday draft, error taxonomy, and a hash-complete local release manifest.
 
 ```text
 configs/          Locked machine-readable experiment settings
-docs/             Protocol, controls, hypotheses, and limitations
-notebooks/        Canonical output-free guided experiment notebook
-scripts/          Deterministic notebook generator
+docs/             Protocol, aggregate results, release handoff, and public-safe figures
+notebooks/        Guided experiment notebook and visual results companion
+scripts/          Deterministic notebook and results-presentation generators
 src/              Typed data, model, attack, training, evaluation, and reporting code
 tests/            Correctness, provenance, CLI, MPS, progress, and notebook gates
+reports/          Reviewed technical and long-form reports
 requirements.txt  Fully pinned Python 3.13 dependency environment
 setup_venv.sh     Isolated venv/pip setup and project kernel registration
 ```
 
-No remote is configured and no public action is part of these commands.
+## Verification and GitHub handoff
+
+```bash
+.venv/bin/python -m pytest -q -p no:cacheprovider
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m mypy src
+.venv/bin/python scripts/check_repository.py
+```
+
+The final command performs a read-only review of tracked and unignored candidate files:
+private absolute paths, common credential forms, oversized files, forbidden experiment
+binaries, notebook state, and local Markdown links. See the
+[GitHub handoff guide](docs/github.md) and [contribution guide](CONTRIBUTING.md).
+
+Original project code and documentation use the [MIT license](LICENSE). The Oxford-IIIT
+Pet data and downloaded model weights are not distributed; see
+[third-party notices](THIRD_PARTY_NOTICES.md). No remote is configured, and none of these
+commands creates a repository, pushes code, publishes a release, or authorizes a public
+claim.

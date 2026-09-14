@@ -1,0 +1,284 @@
+{
+  "arms": {
+    "adversarial": {
+      "attack_subset": {
+        "clean_accuracy": 0.7256756756756757,
+        "fgsm_robust_accuracy": 0.3108108108108108,
+        "pgd_attack_success_among_clean_correct": 0.7150837988826816,
+        "pgd_robust_accuracy": 0.20675675675675675
+      },
+      "clean_test": {
+        "accuracy": 0.729081493594985,
+        "aurc": 0.09164395757399697,
+        "brier": 0.36950352209311366,
+        "coverage": 0.9070591441809758,
+        "ece_15": 0.018815673492015444,
+        "macro_accuracy": 0.7283966919237724,
+        "nll": 0.8756187970972433,
+        "selective_risk": 0.22506009615384615
+      },
+      "representation": {
+        "clean_knn_accuracy": 0.7040540540540541,
+        "clean_nearest_centroid_accuracy": 0.722972972972973,
+        "clean_to_pgd_linear_cka": 0.8626585918713413,
+        "median_cosine_drift": 0.037758347614832044,
+        "median_relative_l2_drift": 0.2832742205771381,
+        "pgd_knn_accuracy": 0.2756756756756757,
+        "pgd_knn_breed_retention": 0.25621621621621626,
+        "pgd_nearest_centroid_accuracy": 0.26756756756756755
+      },
+      "training": {
+        "elapsed_seconds": 1599.6335382920006,
+        "epochs": 15,
+        "optimizer_updates": 1380
+      }
+    },
+    "standard": {
+      "attack_subset": {
+        "clean_accuracy": 0.8797297297297297,
+        "fgsm_robust_accuracy": 0.02837837837837838,
+        "pgd_attack_success_among_clean_correct": 1.0,
+        "pgd_robust_accuracy": 0.0
+      },
+      "clean_test": {
+        "accuracy": 0.8915235759062414,
+        "aurc": 0.021307014659939606,
+        "brier": 0.16066344573573027,
+        "coverage": 0.8923412373943854,
+        "ece_15": 0.022437972412339902,
+        "macro_accuracy": 0.8912780307907806,
+        "nll": 0.36502976925163,
+        "selective_risk": 0.06108735491753207
+      },
+      "representation": {
+        "clean_knn_accuracy": 0.8864864864864865,
+        "clean_nearest_centroid_accuracy": 0.8891891891891892,
+        "clean_to_pgd_linear_cka": 0.16687396154589065,
+        "median_cosine_drift": 0.45314273065018645,
+        "median_relative_l2_drift": 2.8831984386285807,
+        "pgd_knn_accuracy": 0.0,
+        "pgd_knn_breed_retention": 0.001081081081081081,
+        "pgd_nearest_centroid_accuracy": 0.0
+      },
+      "training": {
+        "elapsed_seconds": 481.7885293750005,
+        "epochs": 15,
+        "optimizer_updates": 1380
+      }
+    }
+  },
+  "difficult_pair": {
+    "first_class": 5,
+    "first_name": "Bengal",
+    "mean_cosine_centroid_distance": 0.11002739499069292,
+    "second_class": 11,
+    "second_name": "Egyptian_Mau",
+    "symmetric_confusion_count_across_models": 10,
+    "tie_breakers": "minimum centroid distance, then ascending class IDs"
+  },
+  "limitations": [
+    "One ImageNet-initialized ResNet-18 pair and one split/seed family were evaluated.",
+    "Bootstrap intervals quantify paired test-sample uncertainty, not retraining variability.",
+    "PGD-20 with five restarts is finite digital attack search, not certified robustness.",
+    "PCA, t-SNE, and UMAP distort different relationships and are explanatory only.",
+    "Synthetic corruptions and bounded pixel attacks do not establish physical or safe use."
+  ],
+  "observed_at": "2026-09-14T19:52:32+05:30",
+  "primary_hypothesis": {
+    "decision_rule": "drift upper < 0 and retention lower > 0",
+    "drift_ci95": [
+      -0.42340289667058684,
+      -0.4089427028658589
+    ],
+    "drift_difference_adversarial_minus_standard": -0.4153843830353544,
+    "primary_supported": true,
+    "replicates": 2000,
+    "retention_ci95": [
+      0.23539864864864862,
+      0.2762162162162162
+    ],
+    "retention_difference_adversarial_minus_standard": 0.2551351351351352,
+    "seed": 20260919
+  },
+  "project": "Adversarial Representation Drift in Fine-Grained Pet Recognition",
+  "protocol": {
+    "architecture": "resnet18",
+    "attack": {
+      "epsilon": 0.01568627450980392,
+      "evaluation_restarts": 5,
+      "evaluation_steps": 20,
+      "norm": "linf",
+      "targeted": false,
+      "training_steps": 5
+    },
+    "attack_subset_count": 740,
+    "classes": 37,
+    "dataset": "Oxford-IIIT Pet",
+    "dataset_license": "CC BY-SA 4.0 dataset; original image copyrights retained",
+    "dataset_source": "Oxford-IIIT Pet official images and annotations via Torchvision",
+    "device": "mps",
+    "dtype": "float32",
+    "epochs": 15,
+    "pretrained_weights": "IMAGENET1K_V1",
+    "split": {
+      "calibration": 736,
+      "official_test": 3669,
+      "training": 2944
+    }
+  },
+  "provenance": {
+    "checkpoints": {
+      "adversarial": {
+        "sha256": "bc26317747ab02b5a8bee257d29c9ba7f6808f379af2876221eafaf5e4dd76c6"
+      },
+      "standard": {
+        "sha256": "9e652348f5624baf68c0698693edbcb4d73030316bc7f1102da25745a33559d8"
+      }
+    },
+    "configuration_sha256": "9e9727fe7a442e0e181349073577dca9c2e72828416c88dfe5f9d446f2ee9b14",
+    "dataset_sha256": "a53731795058db4b4a0efff0b2a07f9eb859378f2ae2f9d365544f1e054b4f3f",
+    "evaluation_sha256": "277e82bc11232ffe69c73762bf13bb95450cf0706fde6263b0c94e405adfd24e",
+    "execution_source_sha256": "4877d27990478ebc2c1bea6fbd0273ba3fae1c469c414e648699573ec92c7d21",
+    "initialization_sha256": "08bfc6a63c37296dd518a5716036a234f64b7661321f26569ff14dbb857379e7",
+    "public_assets": {
+      "docs/assets/cosine-drift.png": "6eed901e3a40b773293a02c89b13e41f2960eee4abf0d008bad634a2fd3dbe03",
+      "docs/assets/knn-retention-by-breed.png": "e457b919ac1d3585195d7e78bc7f2f87167f939750fba2e3cfa69eeee4a2c487"
+    },
+    "public_reports": {
+      "reports/long_form_report.md": "e0179a6eb38271df0c9fd340fede8f2b0f008e2739d8315b6601d9e29443ae72",
+      "reports/technical_report.md": "201cb8ef8b7666068e0ac9c6a4c90651d0b26b00958e584f3fcd245dcf35adea"
+    },
+    "representations_sha256": "58f32c537815384ae8d7cad95bab08b5098e4199818014ff2b1fb4721ecfdec5",
+    "split_sha256": "017d8f9ea63a8e58685ab9a29cc7343174241b7973025ff035314c37388190aa"
+  },
+  "registered_corruptions": {
+    "brightness-0.6": {
+      "adversarial_accuracy": 0.49277732352139547,
+      "adversarial_coverage": 0.7737803216135186,
+      "adversarial_selective_risk": 0.42021838675589995,
+      "standard_accuracy": 0.8765331152902698,
+      "standard_coverage": 0.880348868901608,
+      "standard_selective_risk": 0.07027863777089784
+    },
+    "brightness-0.8": {
+      "adversarial_accuracy": 0.6756609430362497,
+      "adversarial_coverage": 0.8735350231670755,
+      "adversarial_selective_risk": 0.26521060842433697,
+      "standard_accuracy": 0.8896156991005724,
+      "standard_coverage": 0.8868901608067593,
+      "standard_selective_risk": 0.06207744314689613
+    },
+    "contrast-0.5": {
+      "adversarial_accuracy": 0.25756336876533115,
+      "adversarial_coverage": 0.6538566366857455,
+      "adversarial_selective_risk": 0.681117132138391,
+      "standard_accuracy": 0.8408285636413192,
+      "standard_coverage": 0.8285636413191605,
+      "standard_selective_risk": 0.08026315789473684
+    },
+    "contrast-0.75": {
+      "adversarial_accuracy": 0.6358680839465795,
+      "adversarial_coverage": 0.8381030253475061,
+      "adversarial_selective_risk": 0.288130081300813,
+      "standard_accuracy": 0.886617606977378,
+      "standard_coverage": 0.8819841918778959,
+      "standard_selective_risk": 0.06613102595797281
+    },
+    "gaussian_blur-0.75": {
+      "adversarial_accuracy": 0.6901062959934587,
+      "adversarial_coverage": 0.8776233306077951,
+      "adversarial_selective_risk": 0.25124223602484475,
+      "standard_accuracy": 0.8539111474516217,
+      "standard_coverage": 0.8517307168165713,
+      "standard_selective_risk": 0.08256
+    },
+    "gaussian_blur-1.5": {
+      "adversarial_accuracy": 0.5750885799945489,
+      "adversarial_coverage": 0.8053965658217498,
+      "adversarial_selective_risk": 0.3455160744500846,
+      "standard_accuracy": 0.713818479149632,
+      "standard_coverage": 0.7151812482965386,
+      "standard_selective_risk": 0.17339939024390244
+    },
+    "gaussian_noise-0.02": {
+      "adversarial_accuracy": 0.7288089397656037,
+      "adversarial_coverage": 0.908149359498501,
+      "adversarial_selective_risk": 0.22569027611044418,
+      "standard_accuracy": 0.884709730171709,
+      "standard_coverage": 0.880348868901608,
+      "standard_selective_risk": 0.06501547987616099
+    },
+    "gaussian_noise-0.05": {
+      "adversarial_accuracy": 0.7244480784955029,
+      "adversarial_coverage": 0.9059689288634505,
+      "adversarial_selective_risk": 0.22743682310469315,
+      "standard_accuracy": 0.8122104115562824,
+      "standard_coverage": 0.7765058599073317,
+      "standard_selective_risk": 0.09687609687609687
+    }
+  },
+  "schema_version": 1,
+  "secondary_policy_shift": {
+    "adversarial": {
+      "flagged_conditions": [
+        {
+          "condition": "gaussian_blur-0.75",
+          "coverage_delta_from_target": -0.02237666939220495,
+          "selective_risk_delta_from_clean": 0.0261821398709986
+        },
+        {
+          "condition": "gaussian_blur-1.5",
+          "coverage_delta_from_target": -0.09460343417825023,
+          "selective_risk_delta_from_clean": 0.12045597829623844
+        },
+        {
+          "condition": "brightness-0.8",
+          "coverage_delta_from_target": -0.02646497683292448,
+          "selective_risk_delta_from_clean": 0.040150512270490823
+        },
+        {
+          "condition": "brightness-0.6",
+          "coverage_delta_from_target": -0.1262196783864814,
+          "selective_risk_delta_from_clean": 0.1951582906020538
+        },
+        {
+          "condition": "contrast-0.75",
+          "coverage_delta_from_target": -0.061896974652493886,
+          "selective_risk_delta_from_clean": 0.06306998514696688
+        },
+        {
+          "condition": "contrast-0.5",
+          "coverage_delta_from_target": -0.24614336331425457,
+          "selective_risk_delta_from_clean": 0.45605703598454483
+        }
+      ],
+      "hypothesis_met": true
+    },
+    "standard": {
+      "flagged_conditions": [
+        {
+          "condition": "gaussian_noise-0.05",
+          "coverage_delta_from_target": -0.12349414009266835,
+          "selective_risk_delta_from_clean": 0.0357887419585648
+        },
+        {
+          "condition": "gaussian_blur-0.75",
+          "coverage_delta_from_target": -0.04826928318342871,
+          "selective_risk_delta_from_clean": 0.021472645082467927
+        },
+        {
+          "condition": "gaussian_blur-1.5",
+          "coverage_delta_from_target": -0.1848187517034614,
+          "selective_risk_delta_from_clean": 0.11231203532637038
+        },
+        {
+          "condition": "contrast-0.5",
+          "coverage_delta_from_target": -0.07143635868083953,
+          "selective_risk_delta_from_clean": 0.019175802977204774
+        }
+      ],
+      "hypothesis_met": true
+    }
+  },
+  "status": "completed 15-epoch local reference experiment"
+}

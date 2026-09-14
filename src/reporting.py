@@ -136,7 +136,8 @@ def _technical_report(
     target_coverage = 100.0 * config.number("calibration", "target_coverage")
     return f"""# Technical report: adversarial representation drift in Oxford-IIIT Pet
 
-Generated from fixed machine-readable evidence on {utc_now()}.
+Generated from the fixed machine-readable evidence completed on
+{representations["created_at"]}.
 
 ## Registered decision
 
