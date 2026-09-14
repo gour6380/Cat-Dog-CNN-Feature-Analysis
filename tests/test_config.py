@@ -43,6 +43,12 @@ def test_default_projection_values() -> None:
     assert config.value("representations", "umap_metric", str) == "cosine"
 
 
+def test_memory_telemetry_has_no_configured_stop_thresholds() -> None:
+    preflight = load_config(CONFIG).section("preflight")
+    assert "minimum_available_memory_gib" not in preflight
+    assert "maximum_memory_growth_mib" not in preflight
+
+
 def _write_config(tmp_path: Path, raw: dict[str, Any]) -> Path:
     path = tmp_path / "configs" / "experiment.yaml"
     path.parent.mkdir(parents=True)

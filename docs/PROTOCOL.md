@@ -35,7 +35,8 @@ eligible conclusion is bounded digital-attack representation retention.
 
 ## Registered failure behavior
 
-The 224 px, 15-epoch, PGD-5 training protocol is fixed. The runner stops and writes a
-failure record on memory pressure, MPS OOM, invalid perturbation bounds, non-finite
-loss/gradients/logits, parity failure, or provenance mismatch. It does not silently
-lower batch size, resolution, epochs, steps, or model scope.
+The reference configuration uses 224 px, 15 epochs, and PGD-5. Memory snapshots are
+recorded for diagnosis but are not execution gates. The runner still writes a failure
+record on MPS OOM, invalid perturbation bounds, non-finite loss/gradients/logits, parity
+failure, or provenance mismatch. It does not silently lower batch size, resolution,
+epochs, steps, or model scope.

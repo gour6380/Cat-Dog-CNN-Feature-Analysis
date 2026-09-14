@@ -155,7 +155,7 @@ def build() -> Path:
             """
             ## 6. Native MPS preflight
 
-            Full mode first checks memory, dataset isolation, deterministic augmentation/order, identical initialization, CPU/MPS logit parity, PGD bounds, BatchNorm preservation, finite gradients, cleanup, and numerical invariants. Failure stops the notebook before training and remains recorded.
+            Full mode records memory telemetry and checks dataset isolation, deterministic augmentation/order, identical initialization, CPU/MPS logit parity, PGD bounds, BatchNorm preservation, finite gradients, cleanup, and numerical invariants. Memory readings do not block execution; a failed correctness check stops the notebook before training and remains recorded.
             """,
             "preflight",
         ),

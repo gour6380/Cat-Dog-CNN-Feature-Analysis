@@ -22,7 +22,7 @@ from src.io_utils import atomic_save_npz, atomic_write_json, sha256_file, utc_no
 from src.metrics import accuracy_metrics
 from src.model import NormalizedResNet18, load_checkpoint_model
 from src.progress import status, tqdm
-from src.runtime import ensure_finite, ensure_memory, memory_snapshot, record_failure, synchronize
+from src.runtime import ensure_finite, memory_snapshot, record_failure, synchronize
 from src.training import Arm, checkpoint_path, experiment_provenance
 
 BatchTransform = Callable[[torch.Tensor, list[str]], torch.Tensor]
@@ -303,7 +303,6 @@ def evaluate(
             f"Evaluation: checking epoch-{epochs} checkpoints and running on {device.type}...",
             enabled=progress,
         )
-        ensure_memory(device, config.number("preflight", "minimum_available_memory_gib"))
         splits = load_registered_splits(config)
         conditions = registered_corruptions(config.section("corruptions"))
         all_results: dict[str, Any] = {

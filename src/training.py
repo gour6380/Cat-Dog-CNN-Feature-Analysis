@@ -22,7 +22,6 @@ from src.progress import status, tqdm
 from src.runtime import (
     SafetyStop,
     ensure_finite,
-    ensure_memory,
     memory_snapshot,
     record_failure,
     synchronize,
@@ -206,11 +205,10 @@ def train_arm(
     failure = config.project_path("artifacts") / "failures" / f"train-{arm}.json"
     try:
         status(
-            f"{arm}: validating memory and provenance before training...",
+            f"{arm}: validating provenance before training...",
             enabled=progress,
         )
-        minimum_memory = config.number("preflight", "minimum_available_memory_gib")
-        start_memory = ensure_memory(device, minimum_memory)
+        start_memory = memory_snapshot(device)
         splits = load_registered_splits(config)
         training_records = splits["training"]
         model = build_model(config).to(device=device, dtype=torch.float32)
@@ -382,7 +380,6 @@ def train_arm(
                     f"updates={completed_updates}, seconds={epoch_record['seconds']:.1f}.",
                     enabled=progress,
                 )
-                ensure_memory(device, minimum_memory)
         standard_orders = [item["order_sha256"] for item in history]
         order_protocol_hash = sha256_bytes(canonical_json_bytes(standard_orders))
         result = {

@@ -74,8 +74,8 @@ the saved numerical evidence.
 
 `reproduce` reuses only artifacts whose recorded configuration, data, model, and
 initialization hashes match. It never silently reduces resolution, epochs, PGD steps,
-or restarts. Unsafe memory pressure, MPS OOM, invalid attacks, and non-finite values
-stop the run while preserving diagnostic state.
+or restarts. Memory use is recorded as telemetry but does not block execution. MPS OOM,
+invalid attacks, and non-finite values still stop the run while preserving diagnostic state.
 
 ## Guided notebook
 
@@ -119,11 +119,11 @@ output-free. Regenerate the canonical guide after editing its builder with:
 ## Evidence lifecycle
 
 `setup` records the official split and hashes. `preflight` runs data, attack, parity,
-gradient, BatchNorm, determinism, and memory checks. Each epoch checkpoint is written
-atomically and is resumable only after provenance validation. `evaluate` preserves
-aligned local logits/features; `represent` calculates geometry and creates projection
-figures; `report` produces the technical report, long-form report, Sunday draft, error
-taxonomy, and a hash-complete local release manifest.
+gradient, BatchNorm, and determinism checks while recording memory telemetry. Each epoch
+checkpoint is written atomically and is resumable only after provenance validation.
+`evaluate` preserves aligned local logits/features; `represent` calculates geometry and
+creates projection figures; `report` produces the technical report, long-form report,
+Sunday draft, error taxonomy, and a hash-complete local release manifest.
 
 ## Repository map
 

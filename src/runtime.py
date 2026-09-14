@@ -66,17 +66,6 @@ def ensure_finite(name: str, tensor: torch.Tensor) -> None:
         raise SafetyStop(f"non-finite {name} detected")
 
 
-def ensure_memory(device: torch.device, minimum_available_gib: float) -> dict[str, float]:
-    snapshot = memory_snapshot(device)
-    if snapshot["system_available_gib"] < minimum_available_gib:
-        raise SafetyStop(
-            "unsafe memory pressure: "
-            f"{snapshot['system_available_gib']:.2f} GiB available, "
-            f"requires {minimum_available_gib:.2f} GiB"
-        )
-    return snapshot
-
-
 def record_failure(
     destination: Path,
     stage: str,

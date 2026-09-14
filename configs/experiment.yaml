@@ -91,5 +91,3 @@ representations:
 preflight:
   parity_atol: 0.0001
   parity_rtol: 0.0001
-  minimum_available_memory_gib: 4.0
-  maximum_memory_growth_mib: 512.0

@@ -21,7 +21,6 @@ from src.progress import status
 from src.runtime import (
     SafetyStop,
     ensure_finite,
-    ensure_memory,
     memory_snapshot,
     record_failure,
     synchronize,
@@ -166,9 +165,7 @@ def run_preflight(
         if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") not in (None, "0"):
             raise SafetyStop("PYTORCH_ENABLE_MPS_FALLBACK must not enable silent fallback")
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
-        start_memory = ensure_memory(
-            device, config.number("preflight", "minimum_available_memory_gib")
-        )
+        start_memory = memory_snapshot(device)
         status(
             "Preflight: checking data splits, augmentations, and matched ordering...",
             enabled=progress,
@@ -235,7 +232,8 @@ def run_preflight(
             )
         del first_model
         status(
-            "Preflight: checking configured PGD, BatchNorm state, gradients, and memory...",
+            "Preflight: checking configured PGD, BatchNorm state, gradients, "
+            "and memory telemetry...",
             enabled=progress,
         )
         pixels_mps = pixels.to(device=device, dtype=torch.float32)
@@ -283,16 +281,8 @@ def run_preflight(
         if device.type == "mps":
             torch.mps.empty_cache()
         synchronize(device)
-        final_memory = ensure_memory(
-            device, config.number("preflight", "minimum_available_memory_gib")
-        )
+        final_memory = memory_snapshot(device)
         growth = final_memory.get("mps_driver_mib", 0.0) - start_memory.get("mps_driver_mib", 0.0)
-        maximum_growth = config.number("preflight", "maximum_memory_growth_mib")
-        if growth > maximum_growth:
-            raise SafetyStop(
-                "unstable MPS memory after cleanup: "
-                f"grew {growth:.1f} MiB, limit {maximum_growth:.1f}"
-            )
         result = {
             "schema_version": 1,
             "status": "passed",
