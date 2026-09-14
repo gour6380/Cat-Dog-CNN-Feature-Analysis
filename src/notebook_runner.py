@@ -51,9 +51,10 @@ def _serialize(notebook: Any) -> str:
     return str(nbformat.writes(notebook))  # type: ignore[no-untyped-call]
 
 
-def run_notebook(config_path: Path, *, full: bool, requested: str) -> Path:
+def run_notebook(config_path: Path, *, full: bool, requested: str | None = None) -> Path:
     require_project_environment()
     config = load_config(config_path)
+    requested_device = requested or config.value("training", "device", str)
     source_path = ROOT / "notebooks" / "oxford_pets_adversarial_representations.ipynb"
     notebook = nbformat.read(source_path, as_version=4)  # type: ignore[no-untyped-call]
     nbformat.validate(notebook)
@@ -70,7 +71,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str) -> Path:
         **os.environ,
         "OXFORD_PETS_NOTEBOOK_CONFIG": str(config.path),
         "OXFORD_PETS_NOTEBOOK_RUN_FULL": "1" if full else "0",
-        "OXFORD_PETS_NOTEBOOK_DEVICE": requested,
+        "OXFORD_PETS_NOTEBOOK_DEVICE": requested_device,
         "OXFORD_PETS_NOTEBOOK_ROOT": str(ROOT),
     }
 
@@ -96,7 +97,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str) -> Path:
             "status": "complete",
             "created_at": utc_now(),
             "mode": "full" if full else "safe",
-            "requested_device": requested,
+            "requested_device": requested_device,
             "python": sys.executable,
             "config_sha256": config.sha256,
             "source_sha256": source_before,
@@ -115,7 +116,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str) -> Path:
             error,
             {
                 "mode": "full" if full else "safe",
-                "requested_device": requested,
+                "requested_device": requested_device,
                 "config_sha256": config.sha256,
                 "partial_output": str(output) if output.is_file() else None,
             },
@@ -128,11 +129,12 @@ def main(argv: list[str] | None = None) -> int:
         description="Execute the Week 3 guide; --full explicitly enables scientific stages"
     )
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "experiment.yaml")
-    parser.add_argument("--device", choices=("mps", "cpu"), default="mps")
+    parser.add_argument("--device", choices=("mps", "cpu"))
     parser.add_argument("--full", action="store_true")
     args = parser.parse_args(argv)
     try:
-        print(run_notebook(args.config, full=bool(args.full), requested=str(args.device)))
+        requested = None if args.device is None else str(args.device)
+        print(run_notebook(args.config, full=bool(args.full), requested=requested))
         return 0
     except BaseException as error:
         print(f"Notebook stopped: {error}", file=sys.stderr)

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import json
+from copy import deepcopy
+from pathlib import Path
+from typing import Any
+
+import pytest
 import torch
 from PIL import Image
 
+from src.config import ExperimentConfig
 from src.data import (
+    DataError,
     SampleRecord,
     deterministic_eval_transform,
     deterministic_train_transform,
     epoch_order,
+    load_registered_splits,
     split_payload_hash,
     stratified_hash_selection,
     stratified_train_calibration_split,
@@ -88,3 +97,61 @@ def test_split_hash_excludes_recording_timestamp() -> None:
     assert split_payload_hash(first) == split_payload_hash(second)
     second["test"] = ["c"]
     assert split_payload_hash(first) != split_payload_hash(second)
+
+
+def test_registered_split_is_scoped_to_data_settings_not_full_config(tmp_path: Path) -> None:
+    trainval = _records()
+    test = [
+        SampleRecord(
+            sample_id=f"test_{record.sample_id}",
+            image_path=record.image_path,
+            label=record.label,
+            species=record.species,
+            breed_name=record.breed_name,
+            official_split="test",
+        )
+        for record in _records()
+    ]
+    training, calibration = stratified_train_calibration_split(trainval, 0.8, "split")
+    attack = stratified_hash_selection(test, 4, "selection:attack")
+    projection = stratified_hash_selection(attack, 2, "selection:projection")
+    payload = {
+        "schema_version": 1,
+        "created_at": "recorded",
+        "config_sha256": "old-full-config",
+        "split_seed": "split",
+        "selection_seed": "selection",
+        "training": [record.to_json() for record in training],
+        "calibration": [record.to_json() for record in calibration],
+        "test": [record.to_json() for record in test],
+        "attack_subset_ids": [record.sample_id for record in attack],
+        "projection_subset_ids": [record.sample_id for record in projection],
+    }
+    payload["split_sha256"] = split_payload_hash(payload)
+    destination = tmp_path / "artifacts" / "data" / "splits.json"
+    destination.parent.mkdir(parents=True)
+    destination.write_text(json.dumps(payload), encoding="utf-8")
+    raw: dict[str, Any] = {
+        "paths": {"artifacts": "artifacts"},
+        "dataset": {
+            "expected_trainval": 30,
+            "expected_test": 30,
+            "classes": 3,
+            "train_fraction": 0.8,
+            "split_seed": "split",
+            "attack_per_class": 4,
+            "projection_per_class": 2,
+            "selection_seed": "selection",
+        },
+        "training": {"epochs": 1},
+    }
+    changed = ExperimentConfig(
+        tmp_path / "configs" / "experiment.yaml", tmp_path, raw, "new-full-config"
+    )
+    assert len(load_registered_splits(changed)["training"]) == 24
+
+    stale_raw = deepcopy(raw)
+    stale_raw["dataset"]["selection_seed"] = "different"
+    stale = ExperimentConfig(changed.path, changed.root, stale_raw, "another-full-config")
+    with pytest.raises(DataError, match="run setup again"):
+        load_registered_splits(stale)

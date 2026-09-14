@@ -280,17 +280,64 @@ def load_registered_splits(config: ExperimentConfig) -> dict[str, list[SampleRec
     if not path.is_file():
         raise DataError("registered split is missing; run setup first")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("config_sha256") != config.sha256:
-        raise DataError("registered split configuration hash does not match")
+    if not isinstance(payload, dict):
+        raise DataError("registered split manifest is invalid")
     expected = payload.get("split_sha256")
     if split_payload_hash(payload) != expected:
         raise DataError("registered split manifest hash is invalid")
+    training = _records_from_json(payload.get("training"))
+    calibration = _records_from_json(payload.get("calibration"))
+    test = _records_from_json(payload.get("test"))
+    attack = _select_ids(payload, "attack_subset_ids")
+    projection = _select_ids(payload, "projection_subset_ids")
+
+    # Only data-dependent settings invalidate a registered split. Training epochs,
+    # learning rates, attack steps, and other downstream parameters remain editable.
+    trainval = [*training, *calibration]
+    if len(trainval) != config.integer("dataset", "expected_trainval") or len(
+        test
+    ) != config.integer("dataset", "expected_test"):
+        raise DataError("configured dataset counts changed; run setup again")
+    classes = config.integer("dataset", "classes")
+    if {record.label for record in trainval} != set(range(classes)) or {
+        record.label for record in test
+    } != set(range(classes)):
+        raise DataError("configured dataset classes changed; run setup again")
+    expected_training, expected_calibration = stratified_train_calibration_split(
+        trainval,
+        config.number("dataset", "train_fraction"),
+        config.value("dataset", "split_seed", str),
+    )
+    expected_attack = stratified_hash_selection(
+        test,
+        config.integer("dataset", "attack_per_class"),
+        config.value("dataset", "selection_seed", str) + ":attack",
+    )
+    expected_projection = stratified_hash_selection(
+        expected_attack,
+        config.integer("dataset", "projection_per_class"),
+        config.value("dataset", "selection_seed", str) + ":projection",
+    )
+
+    def ids(records: list[SampleRecord]) -> list[str]:
+        return [record.sample_id for record in records]
+
+    if any(
+        ids(actual) != ids(expected_records)
+        for actual, expected_records in (
+            (training, expected_training),
+            (calibration, expected_calibration),
+            (attack, expected_attack),
+            (projection, expected_projection),
+        )
+    ):
+        raise DataError("configured split or sample-selection settings changed; run setup again")
     return {
-        "training": _records_from_json(payload.get("training")),
-        "calibration": _records_from_json(payload.get("calibration")),
-        "test": _records_from_json(payload.get("test")),
-        "attack": _select_ids(payload, "attack_subset_ids"),
-        "projection": _select_ids(payload, "projection_subset_ids"),
+        "training": training,
+        "calibration": calibration,
+        "test": test,
+        "attack": attack,
+        "projection": projection,
     }
 
 

@@ -44,7 +44,7 @@ def notebook_context(*, full: bool = False) -> tuple[ExperimentConfig, bool, str
     if override not in {None, "0", "1"}:
         raise ValueError("OXFORD_PETS_NOTEBOOK_RUN_FULL must be 0 or 1")
     selected_full = full if override is None else override == "1"
-    device = os.environ.get("OXFORD_PETS_NOTEBOOK_DEVICE", "mps")
+    device = os.environ.get("OXFORD_PETS_NOTEBOOK_DEVICE", config.value("training", "device", str))
     if device not in {"mps", "cpu"}:
         raise ValueError("OXFORD_PETS_NOTEBOOK_DEVICE must be mps or cpu")
     return config, selected_full, device
@@ -55,7 +55,7 @@ def inspect_environment(config: ExperimentConfig, requested: str) -> dict[str, A
     return {
         "environment": environment_snapshot(),
         "requested_device": requested,
-        "training_device_locked_by_config": config.value("training", "device", str),
+        "training_device_from_config": config.value("training", "device", str),
         "silent_mps_fallback": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0"),
         "requirements": str(requirements.relative_to(ROOT)),
         "requirements_sha256": sha256_file(requirements),
@@ -151,10 +151,12 @@ def run_stage(
 
             if arm is None:
                 raise ValueError("notebook train stage requires an arm")
-            locked = config.value("training", "device", str)
-            if device != locked:
-                raise ValueError(f"training is locked to {locked}, not {device}")
-            result = train_arm(config, arm, require_device(locked), progress=progress)
+            configured = config.value("training", "device", str)
+            if device != configured:
+                raise ValueError(
+                    f"requested device {device} does not match training.device {configured}"
+                )
+            result = train_arm(config, arm, require_device(configured), progress=progress)
         elif stage == "evaluate":
             from src.evaluation import evaluate
 

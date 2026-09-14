@@ -1,4 +1,4 @@
-"""Hardware and scientific-validity preflight for the locked MPS run."""
+"""Hardware and scientific-validity preflight for the configured run."""
 
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ def _assert_setup(config: ExperimentConfig) -> dict[str, Any]:
     if not path.is_file():
         raise SafetyStop("setup manifest is missing; run setup first")
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("config_sha256") != config.sha256:
-        raise SafetyStop("setup manifest does not match the registered configuration")
+    if not isinstance(value, dict) or value.get("status") != "complete":
+        raise SafetyStop("setup manifest is invalid; run setup again")
     return cast(dict[str, Any], value)
 
 
@@ -154,11 +154,15 @@ def run_preflight(
     started = time.perf_counter()
     try:
         status(
-            "Preflight: validating the registered setup and native MPS backend...", enabled=progress
+            "Preflight: validating the registered setup and configured backend...",
+            enabled=progress,
         )
         setup = _assert_setup(config)
-        if device.type != "mps":
-            raise SafetyStop("the locked full-training preflight requires --device mps")
+        configured_device = config.value("training", "device", str)
+        if device.type != configured_device:
+            raise SafetyStop(
+                f"preflight device {device.type} does not match training.device {configured_device}"
+            )
         if os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK") not in (None, "0"):
             raise SafetyStop("PYTORCH_ENABLE_MPS_FALLBACK must not enable silent fallback")
         os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "0"
@@ -198,7 +202,10 @@ def run_preflight(
         ]
         if order_standard != order_adversarial:
             raise SafetyStop("matched sample order failed")
-        status("Preflight: checking initialization and CPU/MPS logit parity...", enabled=progress)
+        status(
+            f"Preflight: checking initialization and CPU/{device.type} logit parity...",
+            enabled=progress,
+        )
         first_model = build_model(config)
         second_model = build_model(config)
         first_hash = state_dict_hash(first_model.state_dict())
@@ -206,10 +213,11 @@ def run_preflight(
         expected_init = experiment_provenance(config)["initialization_sha256"]
         if first_hash != second_hash or first_hash != expected_init:
             raise SafetyStop("matched initialization hash failed")
-        evaluation_dataset = PetRecordDataset(test[:16], config, training=False)
-        pixels = torch.stack([evaluation_dataset[index][0] for index in range(16)])
-        labels = torch.tensor([evaluation_dataset[index][1] for index in range(16)])
-        ids = [evaluation_dataset[index][2] for index in range(16)]
+        probe_batch_size = min(config.integer("training", "micro_batch_size"), len(test))
+        evaluation_dataset = PetRecordDataset(test[:probe_batch_size], config, training=False)
+        pixels = torch.stack([evaluation_dataset[index][0] for index in range(probe_batch_size)])
+        labels = torch.tensor([evaluation_dataset[index][1] for index in range(probe_batch_size)])
+        ids = [evaluation_dataset[index][2] for index in range(probe_batch_size)]
         first_model.eval()
         with torch.inference_mode():
             cpu_logits = first_model(pixels[:2]).detach()
@@ -222,11 +230,13 @@ def run_preflight(
         rtol = config.number("preflight", "parity_rtol")
         if not torch.allclose(cpu_logits, mps_logits, atol=atol, rtol=rtol):
             raise SafetyStop(
-                f"CPU/MPS logit parity failed: max delta {maximum_delta:.6g}, atol=rtol={atol}"
+                f"CPU/{device.type} logit parity failed: max delta {maximum_delta:.6g}, "
+                f"atol={atol}, rtol={rtol}"
             )
         del first_model
         status(
-            "Preflight: checking PGD-5, BatchNorm state, gradients, and memory...", enabled=progress
+            "Preflight: checking configured PGD, BatchNorm state, gradients, and memory...",
+            enabled=progress,
         )
         pixels_mps = pixels.to(device=device, dtype=torch.float32)
         labels_mps = labels.to(device=device, dtype=torch.long)
@@ -241,7 +251,7 @@ def run_preflight(
                 epsilon=config.number("attack", "epsilon"),
                 step_size=config.number("attack", "step_size"),
                 steps=config.integer("attack", "train_steps"),
-                random_start=True,
+                random_start=bool(config.section("attack").get("random_start")),
                 restarts=1,
                 seed=config.integer("training", "attack_seed"),
             ),
@@ -252,7 +262,7 @@ def run_preflight(
                 not torch.equal(left, right)
                 for left, right in zip(bn_before[name], bn_after[name], strict=True)
             ):
-                raise SafetyStop(f"BatchNorm state changed in actual PGD-5 probe: {name}")
+                raise SafetyStop(f"BatchNorm state changed in configured PGD probe: {name}")
         mps_model.train()
         logits = mps_model(attack.adversarial)
         loss = nnf.cross_entropy(logits, labels_mps)
@@ -270,7 +280,8 @@ def run_preflight(
         peak_memory = memory_snapshot(device)
         del mps_model, attack, pixels_mps, labels_mps, logits, loss
         gc.collect()
-        torch.mps.empty_cache()
+        if device.type == "mps":
+            torch.mps.empty_cache()
         synchronize(device)
         final_memory = ensure_memory(
             device, config.number("preflight", "minimum_available_memory_gib")
@@ -309,8 +320,8 @@ def run_preflight(
                 "initialization_sha256": first_hash,
                 "matched_initialization": True,
                 "feature_dimension": config.integer("model", "feature_dim"),
-                "cpu_mps_max_logit_delta": maximum_delta,
-                "cpu_mps_allclose": True,
+                "cpu_device_max_logit_delta": maximum_delta,
+                "cpu_device_allclose": True,
                 "finite_gradients": True,
                 "gradient_parameter_count": gradient_count,
                 "batchnorm_unchanged_during_attack": True,
@@ -318,9 +329,9 @@ def run_preflight(
             "software_invariants": _software_invariants(),
             "synthetic_attack_invariants": _synthetic_attack_invariants(),
             "actual_attack": {
-                "batch_size": 16,
-                "input_size": 224,
-                "steps": 5,
+                "batch_size": probe_batch_size,
+                "input_size": config.integer("input", "size"),
+                "steps": config.integer("attack", "train_steps"),
                 "linf_max": actual_linf,
                 "finite": True,
             },
@@ -333,7 +344,7 @@ def run_preflight(
             "elapsed_seconds": time.perf_counter() - started,
         }
         atomic_write_json(config.project_path("artifacts") / "preflight.json", result)
-        status("Preflight passed: the locked MPS experiment may train.", enabled=progress)
+        status("Preflight passed: the configured experiment may train.", enabled=progress)
         return result
     except BaseException as error:
         record_failure(failure, "preflight", error, {"device": str(device)})

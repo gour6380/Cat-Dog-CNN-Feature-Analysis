@@ -49,7 +49,7 @@ def _load_required(
     return {
         "calibration": load_arrays(_path(config, "calibration", f"{arm}.npz")),
         "clean": load_arrays(_path(config, "attack", arm, "clean.npz")),
-        "pgd": load_arrays(_path(config, "attack", arm, "pgd20x5.npz")),
+        "pgd": load_arrays(_path(config, "attack", arm, "pgd.npz")),
     }
 
 
@@ -121,7 +121,8 @@ def _arm_geometry(
             "median": float(np.median(relative)),
             "mean": float(relative.mean()),
         },
-        "five_nn": {
+        "knn": {
+            "neighbours": neighbours,
             "clean_accuracy": clean_knn.accuracy,
             "pgd_accuracy": shifted_knn.accuracy,
             "clean_retention": clean_knn.retention,
@@ -207,10 +208,13 @@ def _scatter_projection(
     species: IntArray,
     title: str,
     destination: Path,
+    shifted_label: str,
 ) -> None:
     figure, axes = plt.subplots(1, 2, figsize=(13, 5.5), constrained_layout=True)
     colors = plt.get_cmap("turbo")(labels / max(int(labels.max()), 1))
-    for axis, coordinates, state in zip(axes, (clean, shifted), ("clean", "PGD-20×5"), strict=True):
+    for axis, coordinates, state in zip(
+        axes, (clean, shifted), ("clean", shifted_label), strict=True
+    ):
         for species_value, marker, label in ((0, "o", "cat"), (1, "^", "dog")):
             selected = species == species_value
             axis.scatter(
@@ -262,6 +266,10 @@ def _projection_group(
     labels = clean_all["labels"][mask].astype(np.int64)
     species = clean_all["species"][mask].astype(np.int64)
     seed = config.integer("representations", "projection_seed")
+    attack_label = (
+        f"PGD-{config.integer('attack', 'evaluation_steps')}×"
+        f"{config.integer('attack', 'evaluation_restarts')}"
+    )
     figure_root = config.project_path("figures") / "projections"
     coordinate_root = config.project_path("results") / "projection_coordinates"
     status(f"Represent: {arm} — fitting calibration PCA.", enabled=progress)
@@ -276,6 +284,7 @@ def _projection_group(
         species,
         f"PCA — {arm} model (fit on clean calibration features)",
         figure_root / f"pca-{arm}.png",
+        attack_label,
     )
     joint = np.concatenate([clean, shifted], axis=0)
     status(f"Represent: {arm} — fitting joint clean/PGD t-SNE.", enabled=progress)
@@ -297,6 +306,7 @@ def _projection_group(
         species,
         f"t-SNE — {arm} model (joint clean + PGD fit)",
         figure_root / f"tsne-{arm}.png",
+        attack_label,
     )
     status(f"Represent: {arm} — fitting and transforming calibration UMAP.", enabled=progress)
     reducer = umap.UMAP(
@@ -318,6 +328,7 @@ def _projection_group(
         species,
         f"UMAP — {arm} model (fit on clean calibration features)",
         figure_root / f"umap-{arm}.png",
+        attack_label,
     )
     coordinates: dict[str, np.ndarray[Any, Any]] = {
         "sample_ids": clean_all["sample_ids"][mask],
@@ -333,7 +344,10 @@ def _projection_group(
     atomic_save_npz(coordinate_root / f"{arm}.npz", coordinates)
     return {
         "sample_count": expected,
-        "selection": "exactly 10 hash-selected official-test images per breed",
+        "selection": (
+            f"exactly {config.integer('dataset', 'projection_per_class')} hash-selected "
+            "official-test images per breed"
+        ),
         "pca_explained_variance_ratio": pca.explained_variance_ratio_.tolist(),
         "pca_fit_partition": "clean calibration",
         "tsne_fit": "joint clean and PGD fixed subset within this model",
@@ -417,6 +431,8 @@ def _geometry_figures(
 ) -> None:
     root = config.project_path("figures") / "geometry"
     root.mkdir(parents=True, exist_ok=True)
+    feature_dim = config.integer("model", "feature_dim")
+    neighbours = config.integer("representations", "neighbours")
     figure, axis = plt.subplots(figsize=(8, 5), constrained_layout=True)
     axis.boxplot(
         [aligned["standard"]["cosine_drift"], aligned["adversarial"]["cosine_drift"]],
@@ -424,7 +440,7 @@ def _geometry_figures(
         showfliers=False,
     )
     axis.set_ylabel("1 − cosine(clean feature, PGD feature)")
-    axis.set_title("Original 512-D clean-to-PGD representation drift")
+    axis.set_title(f"Original {feature_dim}-D clean-to-PGD representation drift")
     axis.grid(axis="y", alpha=0.2)
     figure.savefig(root / "cosine-drift.png", dpi=180)
     plt.close(figure)
@@ -440,8 +456,8 @@ def _geometry_figures(
     axis.bar(positions - 0.2, standard_means, width=0.4, label="standard")
     axis.bar(positions + 0.2, adversarial_means, width=0.4, label="adversarial")
     axis.set_xlabel("breed class ID")
-    axis.set_ylabel("fraction of five clean-calibration neighbours with true breed")
-    axis.set_title("PGD five-neighbour breed retention in original 512-D space")
+    axis.set_ylabel(f"fraction of {neighbours} clean-calibration neighbours with true breed")
+    axis.set_title(f"PGD {neighbours}-neighbour breed retention in original {feature_dim}-D space")
     axis.legend()
     axis.grid(axis="y", alpha=0.2)
     figure.savefig(root / "knn-retention-by-breed.png", dpi=180)
@@ -484,7 +500,7 @@ def _error_taxonomy(
 
 def represent(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
     status(
-        "Represent: loading aligned 512-D features for both fixed model arms...",
+        "Represent: loading aligned original features for both configured model arms...",
         enabled=progress,
     )
     arm_names: tuple[Arm, Arm] = ("standard", "adversarial")
@@ -538,7 +554,9 @@ def represent(config: ExperimentConfig, *, progress: bool = True) -> dict[str, A
         "schema_version": 1,
         "created_at": utc_now(),
         "config_sha256": config.sha256,
-        "quantitative_space": "original 512-dimensional penultimate features",
+        "quantitative_space": (
+            f"original {config.integer('model', 'feature_dim')}-dimensional penultimate features"
+        ),
         "geometry": geometry,
         "primary_hypothesis": primary,
         "projection_settings": projections,
@@ -548,7 +566,7 @@ def represent(config: ExperimentConfig, *, progress: bool = True) -> dict[str, A
         "interpretation_limits": [
             "raw coordinates are not compared across independently fitted model projections",
             "PCA, t-SNE, and UMAP are explanatory views, not robustness evidence",
-            "finite PGD-20x5 evidence does not establish physical or unrestricted robustness",
+            "finite configured-PGD evidence does not establish physical or unrestricted robustness",
         ],
     }
     destination = config.project_path("results") / "representations.json"

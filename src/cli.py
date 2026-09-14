@@ -1,4 +1,4 @@
-"""Typed command-line interface for the locked experiment."""
+"""Typed command-line interface for the configured experiment."""
 
 from __future__ import annotations
 

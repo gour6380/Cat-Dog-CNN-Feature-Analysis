@@ -14,7 +14,7 @@ The claim boundary is deliberately narrow: the study can support representation
 retention under a fixed digital `L∞` attack. It cannot establish physical robustness,
 safe pet recognition, out-of-distribution detection, or production readiness.
 
-## Locked protocol
+## Reference protocol
 
 - Keep the official test partition intact. Split official `trainval` within every
   breed into deterministic 80% training and 20% calibration partitions.
@@ -32,6 +32,14 @@ safe pet recognition, out-of-distribution detection, or production readiness.
 The complete repository-local protocol is [`docs/PROTOCOL.md`](docs/PROTOCOL.md), and
 the machine-readable copy is [`configs/experiment.yaml`](configs/experiment.yaml).
 The project README does not rely on private program files outside this checkout.
+
+The YAML file is the source of truth, not a second table of hard-coded values in Python.
+You may edit epochs, batch sizes, attack settings, coverage, projection settings, and
+other valid experiment parameters. Every edit produces a different configuration hash,
+so checkpoints and computed results from another configuration are not reused silently.
+Changes to dataset splitting or model initialization require `setup` to be run again;
+ordinary training and evaluation parameter changes do not invalidate the registered data
+split. Commands never change a requested value automatically.
 
 ## Environment
 
@@ -88,7 +96,7 @@ The setup cell rejects an interpreter outside this checkout's `.venv`.
 `RUN_FULL_EXPERIMENT = False` is the default, so preflight, training, attacks,
 representation fitting, and reporting are skipped during safe inspection. Change it to
 `True`, rerun the setup cell, and then run every cell in order only when intentionally
-starting the locked experiment.
+starting the configured experiment.
 
 For headless execution with the exact calling interpreter:
 

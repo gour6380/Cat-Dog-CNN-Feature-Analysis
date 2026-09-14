@@ -11,7 +11,9 @@ from typing import Any
 
 import nbformat
 
-ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ROOT = PROJECT_ROOT
+RUFF_CONFIG = PROJECT_ROOT / "pyproject.toml"
 
 
 def _markdown(source: str, identifier: str) -> Any:
@@ -260,7 +262,15 @@ def build() -> Path:
         ["check"],
     ):
         subprocess.run(
-            [sys.executable, "-m", "ruff", *arguments, str(output)],
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                *arguments,
+                "--config",
+                str(RUFF_CONFIG),
+                str(output),
+            ],
             cwd=ROOT,
             check=True,
         )

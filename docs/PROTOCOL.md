@@ -2,6 +2,10 @@
 
 Registered: 14 September 2026, before model training or test evaluation.
 
+This document records the reference configuration. Experiment parameters remain editable
+in `configs/experiment.yaml`; a changed file receives a new configuration hash and defines
+a separate run rather than being rejected by duplicated constants in the source code.
+
 ## Primary decision
 
 On the fixed 740-image (20 per breed) test subset, compare adversarial minus standard:

@@ -9,7 +9,14 @@ from torch import nn
 
 from src.config import ExperimentConfig
 from src.model import atomic_torch_save
-from src.training import ResumeError, _load_resume, _validate_checkpoint, learning_rate_factor
+from src.training import (
+    ResumeError,
+    _load_resume,
+    _validate_checkpoint,
+    accumulation_window_size,
+    checkpoint_path,
+    learning_rate_factor,
+)
 
 
 def test_one_epoch_warmup_then_cosine_to_zero() -> None:
@@ -23,6 +30,26 @@ def test_one_epoch_warmup_then_cosine_to_zero() -> None:
 def test_schedule_rejects_out_of_range_update() -> None:
     with pytest.raises(ValueError):
         learning_rate_factor(0, 2, 6)
+
+
+def test_partial_accumulation_window_uses_its_actual_size() -> None:
+    assert [accumulation_window_size(index, 5, 2) for index in range(1, 6)] == [
+        2,
+        2,
+        2,
+        2,
+        1,
+    ]
+
+
+def test_checkpoint_namespaces_follow_configuration_hash(tmp_path: Path) -> None:
+    raw = {"paths": {"checkpoints": "checkpoints"}}
+    first = ExperimentConfig(tmp_path / "config.yaml", tmp_path, raw, "a" * 64)
+    second = ExperimentConfig(tmp_path / "config.yaml", tmp_path, raw, "b" * 64)
+    first_path = checkpoint_path(first, "standard", 1)
+    second_path = checkpoint_path(second, "standard", 1)
+    assert first_path != second_path
+    assert first_path.parts[-3:] == ("a" * 16, "standard", "epoch-001.pt")
 
 
 def test_resume_requires_exact_provenance() -> None:
@@ -57,7 +84,7 @@ def test_checkpoint_resume_round_trip(tmp_path: Path) -> None:
     loss = original(torch.ones(1, 3)).sum()
     loss.backward()
     original_optimizer.step()
-    checkpoint = tmp_path / "checkpoints" / "standard" / "epoch-001.pt"
+    checkpoint = checkpoint_path(config, "standard", 1)
     atomic_torch_save(
         checkpoint,
         {

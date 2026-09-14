@@ -96,6 +96,16 @@ def learning_rate_factor(update: int, warmup_updates: int, total_updates: int) -
     return 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
+def accumulation_window_size(batch_index: int, batches_per_epoch: int, accumulation: int) -> int:
+    """Return the divisor for a complete or final partial accumulation window."""
+
+    if not 1 <= batch_index <= batches_per_epoch or accumulation <= 0:
+        raise ValueError("invalid gradient-accumulation position")
+    window_start = ((batch_index - 1) // accumulation) * accumulation + 1
+    window_end = min(window_start + accumulation - 1, batches_per_epoch)
+    return window_end - window_start + 1
+
+
 def _set_learning_rates(
     optimizer: torch.optim.AdamW,
     config: ExperimentConfig,
@@ -123,7 +133,12 @@ def _order_hash(records: list[Any]) -> str:
 
 def checkpoint_path(config: ExperimentConfig, arm: Arm, epoch: int | None = None) -> Path:
     selected_epoch = epoch or config.integer("training", "epochs")
-    return config.project_path("checkpoints") / arm / f"epoch-{selected_epoch:03d}.pt"
+    return (
+        config.project_path("checkpoints")
+        / config.sha256[:16]
+        / arm
+        / f"epoch-{selected_epoch:03d}.pt"
+    )
 
 
 def _validate_checkpoint(payload: dict[str, Any], arm: Arm, provenance: dict[str, str]) -> None:
@@ -138,7 +153,7 @@ def _validate_checkpoint(payload: dict[str, Any], arm: Arm, provenance: dict[str
 
 
 def _latest_checkpoint(config: ExperimentConfig, arm: Arm) -> Path | None:
-    directory = config.project_path("checkpoints") / arm
+    directory = config.project_path("checkpoints") / config.sha256[:16] / arm
     candidates = sorted(directory.glob("epoch-*.pt")) if directory.is_dir() else []
     return candidates[-1] if candidates else None
 
@@ -186,12 +201,12 @@ def train_arm(
     *,
     progress: bool = True,
 ) -> dict[str, Any]:
-    """Train or resume one fixed arm without inspecting the test partition."""
+    """Train or resume one configured arm without inspecting the test partition."""
 
     failure = config.project_path("artifacts") / "failures" / f"train-{arm}.json"
     try:
         status(
-            f"{arm}: validating memory and provenance before locked MPS training...",
+            f"{arm}: validating memory and provenance before training...",
             enabled=progress,
         )
         minimum_memory = config.number("preflight", "minimum_available_memory_gib")
@@ -226,12 +241,7 @@ def train_arm(
         micro_batch = config.integer("training", "micro_batch_size")
         accumulation = config.integer("training", "gradient_accumulation_steps")
         batches_per_epoch = math.ceil(len(training_records) / micro_batch)
-        if batches_per_epoch % accumulation:
-            raise SafetyStop(
-                "registered split leaves a partial accumulation window; "
-                "change is forbidden mid-protocol"
-            )
-        updates_per_epoch = batches_per_epoch // accumulation
+        updates_per_epoch = math.ceil(batches_per_epoch / accumulation)
         total_updates = epochs * updates_per_epoch
         warmup_updates = config.integer("training", "warmup_epochs") * updates_per_epoch
         expected_resume_updates = resumed_epoch * updates_per_epoch
@@ -300,10 +310,13 @@ def train_arm(
                         ensure_finite("training logits", logits)
                         loss = nnf.cross_entropy(logits, labels)
                         ensure_finite("training loss", loss)
-                        (loss / accumulation).backward()  # type: ignore[no-untyped-call]
+                        window_size = accumulation_window_size(
+                            batch_index, batches_per_epoch, accumulation
+                        )
+                        (loss / window_size).backward()  # type: ignore[no-untyped-call]
                         running_loss += float(loss.detach().item()) * len(labels)
                         sample_count += len(labels)
-                        if batch_index % accumulation == 0:
+                        if batch_index % accumulation == 0 or batch_index == batches_per_epoch:
                             last_gradient_norm = _assert_finite_gradients(model)
                             next_update = completed_updates + 1
                             last_lrs = _set_learning_rates(
@@ -383,7 +396,7 @@ def train_arm(
             "elapsed_seconds": time.perf_counter() - started,
         }
         status(
-            f"{arm}: training complete at fixed epoch {epochs}; checkpoint is registered.",
+            f"{arm}: training complete at configured epoch {epochs}; checkpoint is registered.",
             enabled=progress,
         )
         return result

@@ -158,7 +158,7 @@ def _collect_attack(
                 config.number("attack", "epsilon"),
                 config.integer("attack", "evaluation_seed"),
             )
-        elif kind == "pgd20x5":
+        elif kind == "pgd":
             attack = pgd_attack(
                 model,
                 pixels,
@@ -293,8 +293,14 @@ def evaluate(
     failure = config.project_path("artifacts") / "failures" / "evaluate.json"
     started = time.perf_counter()
     try:
+        epochs = config.integer("training", "epochs")
+        attack_steps = config.integer("attack", "evaluation_steps")
+        attack_restarts = config.integer("attack", "evaluation_restarts")
+        attack_per_class = config.integer("dataset", "attack_per_class")
+        attack_label = f"PGD-{attack_steps}×{attack_restarts}"
+        attack_partition = f"fixed {attack_per_class}-per-breed test subset"
         status(
-            f"Evaluation: checking fixed checkpoints and running on {device.type}...",
+            f"Evaluation: checking epoch-{epochs} checkpoints and running on {device.type}...",
             enabled=progress,
         )
         ensure_memory(device, config.number("preflight", "minimum_available_memory_gib"))
@@ -306,7 +312,15 @@ def evaluate(
             "config_sha256": config.sha256,
             "device": str(device),
             "arms": {},
-            "finite_attack_scope": "FGSM and PGD-20x5 at L-infinity epsilon 4/255",
+            "finite_attack_scope": {
+                "attacks": ["FGSM", attack_label],
+                "norm": config.value("attack", "norm", str),
+                "epsilon": config.number("attack", "epsilon"),
+                "step_size": config.number("attack", "step_size"),
+                "pgd_steps": attack_steps,
+                "pgd_restarts": attack_restarts,
+                "samples_per_class": attack_per_class,
+            },
         }
         arm_names: tuple[Arm, Arm] = ("standard", "adversarial")
         for arm in tqdm(
@@ -319,7 +333,7 @@ def evaluate(
             selected_checkpoint = checkpoint_path(config, arm)
             if not selected_checkpoint.is_file():
                 raise EvaluationError(
-                    f"fixed epoch-15 checkpoint is missing: {selected_checkpoint}"
+                    f"configured epoch-{epochs} checkpoint is missing: {selected_checkpoint}"
                 )
             checkpoint_hash = sha256_file(selected_checkpoint)
             provenance = _artifact_provenance(config, arm, checkpoint_hash)
@@ -441,11 +455,11 @@ def evaluate(
                     progress=progress,
                     description=f"{selected_arm} clean attack subset",
                 ),
-                {"partition": "fixed 20-per-breed test subset", "condition": "clean"},
+                {"partition": attack_partition, "condition": "clean"},
             )
-            status(f"Evaluation: {arm} arm — FGSM and PGD-20×5.", enabled=progress)
+            status(f"Evaluation: {arm} arm — FGSM and {attack_label}.", enabled=progress)
             for attack_name in tqdm(
-                ("fgsm", "pgd20x5"),
+                ("fgsm", "pgd"),
                 desc=f"{arm} attacks",
                 unit="attack",
                 leave=False,
@@ -475,7 +489,7 @@ def evaluate(
                     provenance,
                     compute_attack,
                     {
-                        "partition": "fixed 20-per-breed test subset",
+                        "partition": attack_partition,
                         "condition": selected_attack,
                         "finite_attack": True,
                     },
@@ -484,11 +498,11 @@ def evaluate(
                     attack_clean, attacked, classes
                 )
             fgsm_robust = arm_result["attack_subset"]["fgsm"]["robust_accuracy"]
-            pgd_robust = arm_result["attack_subset"]["pgd20x5"]["robust_accuracy"]
+            pgd_robust = arm_result["attack_subset"]["pgd"]["robust_accuracy"]
             arm_result["attack_strength_check"] = {
-                "pgd20x5_not_weaker_by_robust_accuracy": bool(pgd_robust <= fgsm_robust),
+                "pgd_not_weaker_by_robust_accuracy": bool(pgd_robust <= fgsm_robust),
                 "fgsm_robust_accuracy": fgsm_robust,
-                "pgd20x5_robust_accuracy": pgd_robust,
+                "pgd_robust_accuracy": pgd_robust,
             }
             all_results["arms"][arm] = arm_result
             status(f"Evaluation: {arm} arm complete.", enabled=progress)

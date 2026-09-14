@@ -67,26 +67,36 @@ def _condition_table(arm: str, evaluation: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def _attack_table(evaluation: dict[str, Any]) -> str:
+def _attack_label(config: ExperimentConfig) -> str:
+    return (
+        f"PGD-{config.integer('attack', 'evaluation_steps')}×"
+        f"{config.integer('attack', 'evaluation_restarts')}"
+    )
+
+
+def _attack_table(config: ExperimentConfig, evaluation: dict[str, Any]) -> str:
+    attack_label = _attack_label(config)
     rows = [
-        "| Arm | Clean subset | FGSM robust | PGD-20×5 robust | PGD success among clean-correct |",
+        f"| Arm | Clean subset | FGSM robust | {attack_label} robust | "
+        "PGD success among clean-correct |",
         "|---|---:|---:|---:|---:|",
     ]
     for arm in ("standard", "adversarial"):
         attacks = evaluation["arms"][arm]["attack_subset"]
         rows.append(
-            f"| {arm} | {_percent(attacks['pgd20x5']['clean_accuracy_on_subset'])} | "
+            f"| {arm} | {_percent(attacks['pgd']['clean_accuracy_on_subset'])} | "
             f"{_percent(attacks['fgsm']['robust_accuracy'])} | "
-            f"{_percent(attacks['pgd20x5']['robust_accuracy'])} | "
-            f"{_percent(attacks['pgd20x5']['attack_success_clean_correct'])} |"
+            f"{_percent(attacks['pgd']['robust_accuracy'])} | "
+            f"{_percent(attacks['pgd']['attack_success_clean_correct'])} |"
         )
     return "\n".join(rows)
 
 
-def _geometry_table(representations: dict[str, Any]) -> str:
+def _geometry_table(config: ExperimentConfig, representations: dict[str, Any]) -> str:
+    neighbours = config.integer("representations", "neighbours")
     rows = [
         "| Arm | Median cosine drift | Median relative-L2 | "
-        "PGD 5-NN accuracy | PGD 5-NN retention | CKA |",
+        f"PGD {neighbours}-NN accuracy | PGD {neighbours}-NN retention | CKA |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for arm in ("standard", "adversarial"):
@@ -94,8 +104,8 @@ def _geometry_table(representations: dict[str, Any]) -> str:
         rows.append(
             f"| {arm} | {_number(geometry['cosine_drift']['median'])} | "
             f"{_number(geometry['relative_l2_drift']['median'])} | "
-            f"{_percent(geometry['five_nn']['pgd_accuracy'])} | "
-            f"{_percent(geometry['five_nn']['pgd_retention'])} | "
+            f"{_percent(geometry['knn']['pgd_accuracy'])} | "
+            f"{_percent(geometry['knn']['pgd_retention'])} | "
             f"{_number(geometry['linear_cka_clean_to_pgd'])} |"
         )
     return "\n".join(rows)
@@ -117,6 +127,13 @@ def _technical_report(
     config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
 ) -> str:
     primary = representations["primary_hypothesis"]
+    attack_label = _attack_label(config)
+    epsilon = config.number("attack", "epsilon")
+    epochs = config.integer("training", "epochs")
+    feature_dim = config.integer("model", "feature_dim")
+    classes = config.integer("dataset", "classes")
+    neighbours = config.integer("representations", "neighbours")
+    target_coverage = 100.0 * config.number("calibration", "target_coverage")
     return f"""# Technical report: adversarial representation drift in Oxford-IIIT Pet
 
 Generated from fixed machine-readable evidence on {utc_now()}.
@@ -126,23 +143,23 @@ Generated from fixed machine-readable evidence on {utc_now()}.
 {_claim(primary)} The adversarial-minus-standard median cosine-drift difference was
 `{_number(primary["drift_difference_adversarial_minus_standard"], 6)}` with 95% interval
 `[{_number(primary["drift_ci95"][0], 6)}, {_number(primary["drift_ci95"][1], 6)}]`.
-The five-neighbour retention difference was
+The {neighbours}-neighbour retention difference was
 `{_number(primary["retention_difference_adversarial_minus_standard"], 6)}` with 95% interval
 `[{_number(primary["retention_ci95"][0], 6)}, {_number(primary["retention_ci95"][1], 6)}]`.
 
 ## Classification and finite attacks
 
-{_attack_table(evaluation)}
+{_attack_table(config, evaluation)}
 
-PGD-20×5 is a finite untargeted `L∞` evaluation at `epsilon=4/255`; it is not a proof
+{attack_label} is a finite untargeted `L∞` evaluation at `epsilon={epsilon:.8g}`; it is not a proof
 against stronger, adaptive, physical, or unrestricted attacks. Attack success uses only
-samples classified correctly before attack. Both models are their fixed epoch-15 states.
+samples classified correctly before attack. Both models are their configured epoch-{epochs} states.
 
 ## Original-feature geometry
 
-{_geometry_table(representations)}
+{_geometry_table(config, representations)}
 
-All values above use the original 512-dimensional penultimate features. PCA, t-SNE,
+All values above use the original {feature_dim}-dimensional penultimate features. PCA, t-SNE,
 and UMAP figures are explanatory and their independently fitted model coordinates are
 not compared numerically.
 
@@ -154,9 +171,10 @@ not compared numerically.
 
 {_condition_table("adversarial", evaluation)}
 
-Temperatures and 90%-coverage thresholds were fitted only on the deterministic clean
-calibration partition. They were not refitted to the official test set or any attack or
-corruption. Confidence is not presented as an out-of-distribution detector.
+Temperatures and {target_coverage:g}%-coverage thresholds were fitted only on the
+deterministic clean calibration partition. They were not refitted to the official test
+set or any attack or corruption. Confidence is not presented as an out-of-distribution
+detector.
 
 ## Difficult-pair boundary
 
@@ -165,14 +183,14 @@ and `{representations["difficult_pair_selection"]["second_class"]}`, selected by
 symmetric clean-calibration confusion, then minimum centroid distance and class ID. Each
 line is the exact equality of those two linear-head logits restricted to that model's own
 PCA plane with undisplayed coordinates fixed at the calibration mean. It is not an input-
-space boundary or a complete 37-class decision map.
+space boundary or a complete {classes}-class decision map.
 
 ## Limitations and competing explanations
 
 - ImageNet initialization may account for substantial geometry before fine-tuning.
 - Oxford-IIIT Pet has limited examples per breed; a single split and seed limit scope.
 - PCA, t-SNE, and UMAP distort different relationships and cannot validate robustness.
-- PGD-20×5 is finite; failure to find an adversarial example does not prove none exists.
+- {attack_label} is finite; failure to find an adversarial example does not prove none exists.
 - Synthetic pixel corruptions do not establish physical robustness or safe recognition.
 - Optimization dynamics—not adversarial invariance alone—may explain observed geometry.
 
@@ -181,30 +199,37 @@ Configuration SHA-256: `{config.sha256}`. Full provenance and artifact hashes ar
 """
 
 
-def _long_form(evaluation: dict[str, Any], representations: dict[str, Any]) -> str:
+def _long_form(
+    config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
+) -> str:
     primary = representations["primary_hypothesis"]
     standard_clean = evaluation["arms"]["standard"]["full_test"]["clean"]["accuracy"]
     adversarial_clean = evaluation["arms"]["adversarial"]["full_test"]["clean"]["accuracy"]
-    standard_robust = evaluation["arms"]["standard"]["attack_subset"]["pgd20x5"]["robust_accuracy"]
-    adversarial_robust = evaluation["arms"]["adversarial"]["attack_subset"]["pgd20x5"][
+    standard_robust = evaluation["arms"]["standard"]["attack_subset"]["pgd"]["robust_accuracy"]
+    adversarial_robust = evaluation["arms"]["adversarial"]["attack_subset"]["pgd"][
         "robust_accuracy"
     ]
-    return f"""# What adversarial training changed inside a 37-breed pet classifier
+    classes = config.integer("dataset", "classes")
+    training_steps = config.integer("attack", "train_steps")
+    attack_label = _attack_label(config)
+    attack_samples = config.integer("dataset", "attack_per_class") * classes
+    input_size = config.integer("input", "size")
+    return f"""# What adversarial training changed inside a {classes}-breed pet classifier
 
 Two ResNet-18 models began from the same ImageNet tensors, the same newly initialized
-37-class head, the same ordered samples and deterministic crops, and the same number of
+{classes}-class head, the same ordered samples and deterministic crops, and the same number of
 optimizer updates. The only experimental arm difference was whether training examples
-were clean or generated by five-step bounded PGD.
+were clean or generated by {training_steps}-step bounded PGD.
 
 The registered question was not whether one embedding picture looked cleaner. It was
 whether paired features moved less under PGD and kept more same-breed neighbours in the
-original 512-dimensional space. {_claim(primary)}
+original {config.integer("model", "feature_dim")}-dimensional space. {_claim(primary)}
 
 Clean official-test accuracy was {_percent(standard_clean)} for standard fine-tuning and
-{_percent(adversarial_clean)} for adversarial fine-tuning. On the fixed 740-image finite
-PGD-20×5 subset, robust accuracy was {_percent(standard_robust)} and
-{_percent(adversarial_robust)}, respectively. These clean results are trade-offs, not a
-pre-registered directional win.
+{_percent(adversarial_clean)} for adversarial fine-tuning. On the fixed
+{attack_samples}-image finite {attack_label} subset, robust accuracy was
+{_percent(standard_robust)} and {_percent(adversarial_robust)}, respectively. These clean
+results are trade-offs, not a pre-registered directional win.
 
 The visualization lesson matters as much as the result. PCA preserves dominant linear
 variance; t-SNE reconstructs local relationships in a joint sample; UMAP transforms from
@@ -218,24 +243,31 @@ risk were measured without refitting. This is evidence about one frozen confiden
 not an OOD detector and not a safety system.
 
 The narrow conclusion applies to Oxford-IIIT Pet, this split, these seeds, ResNet-18,
-224-pixel inputs, and a finite digital `L∞` threat model. ImageNet pretraining, small
+{input_size}-pixel inputs, and a finite digital `L∞` threat model. ImageNet pretraining, small
 per-breed sample sizes, projection distortion, and incomplete attack coverage remain
 credible competing explanations and limitations.
 """
 
 
-def _sunday_draft(evaluation: dict[str, Any], representations: dict[str, Any]) -> str:
+def _sunday_draft(
+    config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
+) -> str:
     primary = representations["primary_hypothesis"]
+    classes = config.integer("dataset", "classes")
+    train_steps = config.integer("attack", "train_steps")
+    feature_dim = config.integer("model", "feature_dim")
+    neighbours = config.integer("representations", "neighbours")
+    attack_label = _attack_label(config)
     return f"""# Sunday draft — the embedding plot was not the result
 
-I trained matched standard and PGD-5 ResNet-18 models on all 37 Oxford-IIIT Pet breeds.
-The tempting output was six colourful PCA, t-SNE, and UMAP panels. The actual test was
-in the original 512-dimensional feature space.
+I trained matched standard and PGD-{train_steps} ResNet-18 models on all {classes}
+Oxford-IIIT Pet breeds. The tempting output was six colourful PCA, t-SNE, and UMAP
+panels. The actual test was in the original {feature_dim}-dimensional feature space.
 
 Registered outcome: {_claim(primary)}
 
-I required both a lower bootstrapped median cosine drift and higher five-neighbour breed
-retention under finite PGD-20×5. I also froze clean-calibrated temperature/coverage rules
+I required both a lower bootstrapped median cosine drift and higher {neighbours}-neighbour breed
+retention under finite {attack_label}. I also froze clean-calibrated temperature/coverage rules
 before testing noise, blur, brightness, and contrast shifts.
 
 The durable lesson: projections answer different visualization questions. They do not,
@@ -290,8 +322,8 @@ def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]
     long_form = destination / "robust-vision-long-form-report.md"
     sunday = destination / "sunday-draft.md"
     atomic_write_text(technical, _technical_report(config, evaluation, representations))
-    atomic_write_text(long_form, _long_form(evaluation, representations))
-    atomic_write_text(sunday, _sunday_draft(evaluation, representations))
+    atomic_write_text(long_form, _long_form(config, evaluation, representations))
+    atomic_write_text(sunday, _sunday_draft(config, evaluation, representations))
     primary = representations["primary_hypothesis"]
     summary = {
         "schema_version": 1,

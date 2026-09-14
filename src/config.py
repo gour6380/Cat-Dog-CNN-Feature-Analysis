@@ -1,4 +1,4 @@
-"""Configuration loading and locked-protocol validation."""
+"""Configuration loading and structural validation."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ T = TypeVar("T")
 
 
 class ConfigError(RuntimeError):
-    """Raised when the registered protocol is missing or has been changed."""
+    """Raised when the experiment configuration is missing or invalid."""
 
 
 @dataclass(frozen=True)
@@ -59,59 +59,104 @@ class ExperimentConfig:
         return path
 
 
-LOCKED_VALUES: dict[tuple[str, str], object] = {
-    ("experiment", "id"): "oxford-pets-adversarial-representations-v1",
-    ("experiment", "expected_python"): "3.13.15",
-    ("dataset", "classes"): 37,
-    ("dataset", "attack_per_class"): 20,
-    ("dataset", "projection_per_class"): 10,
-    ("model", "architecture"): "resnet18",
-    ("model", "weights"): "IMAGENET1K_V1",
-    ("model", "feature_dim"): 512,
-    ("input", "size"): 224,
-    ("training", "epochs"): 15,
-    ("training", "micro_batch_size"): 16,
-    ("training", "gradient_accumulation_steps"): 2,
-    ("training", "dtype"): "float32",
-    ("attack", "norm"): "linf",
-    ("attack", "train_steps"): 5,
-    ("attack", "evaluation_steps"): 20,
-    ("attack", "evaluation_restarts"): 5,
-    ("representations", "tsne_iterations"): 1500,
-}
-
-
 def _canonical_hash(raw: dict[str, Any]) -> str:
     payload = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
-def validate_locked_protocol(config: ExperimentConfig) -> None:
-    """Reject changes that would silently weaken or redirect the experiment."""
+def validate_config(config: ExperimentConfig) -> None:
+    """Reject malformed or unsupported settings without freezing tunable values."""
 
-    for (section, key), expected in LOCKED_VALUES.items():
-        actual = config.section(section).get(key)
-        if actual != expected:
-            raise ConfigError(
-                f"locked field {section}.{key}: expected {expected!r}, got {actual!r}"
-            )
+    for section in (
+        "experiment",
+        "paths",
+        "dataset",
+        "model",
+        "input",
+        "training",
+        "attack",
+        "corruptions",
+        "calibration",
+        "representations",
+        "preflight",
+    ):
+        config.section(section)
 
-    expected_epsilon = 4.0 / 255.0
-    expected_step = 1.0 / 255.0
-    if abs(config.number("attack", "epsilon") - expected_epsilon) > 1e-15:
-        raise ConfigError("attack.epsilon must remain exactly 4/255")
-    if abs(config.number("attack", "step_size") - expected_step) > 1e-15:
-        raise ConfigError("attack.step_size must remain exactly 1/255")
-    if config.number("dataset", "train_fraction") != 0.8:
-        raise ConfigError("dataset.train_fraction must remain 0.8")
-    if config.number("calibration", "target_coverage") != 0.9:
-        raise ConfigError("calibration.target_coverage must remain 0.9")
     if config.section("experiment").get("public_actions_authorized") is not False:
         raise ConfigError("public actions must remain disabled for this local experiment")
 
+    if config.value("model", "architecture", str) != "resnet18":
+        raise ConfigError("model.architecture is unsupported; available: resnet18")
+    if config.value("model", "weights", str) != "IMAGENET1K_V1":
+        raise ConfigError("model.weights is unsupported; available: IMAGENET1K_V1")
+    if config.value("training", "dtype", str) != "float32":
+        raise ConfigError("training.dtype is unsupported; available: float32")
+    if config.value("training", "device", str) not in {"cpu", "mps"}:
+        raise ConfigError("training.device must be cpu or mps")
+    if config.value("attack", "norm", str) != "linf":
+        raise ConfigError("attack.norm is unsupported; available: linf")
+
+    dataset_classes = config.integer("dataset", "classes")
+    model_classes = config.integer("model", "classes")
+    if dataset_classes <= 1 or model_classes != dataset_classes:
+        raise ConfigError("dataset.classes and model.classes must match and exceed one")
+
+    positive_integers = (
+        ("dataset", "expected_trainval"),
+        ("dataset", "expected_test"),
+        ("dataset", "attack_per_class"),
+        ("dataset", "projection_per_class"),
+        ("model", "feature_dim"),
+        ("input", "size"),
+        ("input", "eval_resize"),
+        ("training", "epochs"),
+        ("training", "micro_batch_size"),
+        ("training", "gradient_accumulation_steps"),
+        ("training", "evaluation_batch_size"),
+        ("attack", "evaluation_restarts"),
+        ("calibration", "ece_bins"),
+        ("representations", "neighbours"),
+        ("representations", "bootstrap_replicates"),
+        ("representations", "tsne_iterations"),
+        ("representations", "umap_neighbours"),
+    )
+    for section, key in positive_integers:
+        if config.integer(section, key) <= 0:
+            raise ConfigError(f"{section}.{key} must be positive")
+
+    if config.integer("dataset", "projection_per_class") > config.integer(
+        "dataset", "attack_per_class"
+    ):
+        raise ConfigError("dataset.projection_per_class cannot exceed attack_per_class")
+    if config.integer("training", "num_workers") < 0:
+        raise ConfigError("training.num_workers cannot be negative")
+    warmup_epochs = config.integer("training", "warmup_epochs")
+    if not 0 <= warmup_epochs <= config.integer("training", "epochs"):
+        raise ConfigError("training.warmup_epochs must be between zero and training.epochs")
+    for key in ("train_steps", "evaluation_steps"):
+        if config.integer("attack", key) < 0:
+            raise ConfigError(f"attack.{key} cannot be negative")
+
+    train_fraction = config.number("dataset", "train_fraction")
+    target_coverage = config.number("calibration", "target_coverage")
+    flip_probability = config.number("input", "horizontal_flip_probability")
+    if not 0.0 < train_fraction < 1.0:
+        raise ConfigError("dataset.train_fraction must be between zero and one")
+    if not 0.0 < target_coverage <= 1.0:
+        raise ConfigError("calibration.target_coverage must be in (0, 1]")
+    if not 0.0 <= flip_probability <= 1.0:
+        raise ConfigError("input.horizontal_flip_probability must be in [0, 1]")
+
+    epsilon = config.number("attack", "epsilon")
+    step_size = config.number("attack", "step_size")
+    if not 0.0 <= epsilon <= 1.0:
+        raise ConfigError("attack.epsilon must be in [0, 1]")
+    if step_size < 0.0:
+        raise ConfigError("attack.step_size cannot be negative")
+
 
 def load_config(path: str | Path, *, enforce_python: bool = True) -> ExperimentConfig:
-    """Load a YAML config, establish its project root, and validate locked fields."""
+    """Load a YAML config, establish its project root, and validate its structure."""
 
     resolved = Path(path).expanduser().resolve()
     if not resolved.is_file():
@@ -122,10 +167,10 @@ def load_config(path: str | Path, *, enforce_python: bool = True) -> ExperimentC
     raw = cast(dict[str, Any], loaded)
     root = resolved.parent.parent.resolve()
     config = ExperimentConfig(resolved, root, raw, _canonical_hash(raw))
-    validate_locked_protocol(config)
+    validate_config(config)
     expected_python = config.value("experiment", "expected_python", str)
     if enforce_python and platform.python_version() != expected_python:
         raise ConfigError(
-            f"locked runtime is CPython {expected_python}; running {platform.python_version()}"
+            f"configured runtime is CPython {expected_python}; running {platform.python_version()}"
         )
     return config
