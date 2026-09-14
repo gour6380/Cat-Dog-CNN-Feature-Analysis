@@ -1,5 +1,9 @@
 # Adversarial Representation Drift in Fine-Grained Pet Recognition
 
+[Protocol](docs/PROTOCOL.md) · [Configuration](configs/experiment.yaml) ·
+[Guided notebook](notebooks/oxford_pets_adversarial_representations.ipynb) ·
+[Source](src/) · [Tests](tests/)
+
 This local, self-contained experiment compares two matched ImageNet-initialized
 ResNet-18 models across all 37 Oxford-IIIT Pet breeds. One model receives standard
 fine-tuning and the other receives PGD-5 adversarial fine-tuning. The primary result
@@ -25,9 +29,9 @@ safe pet recognition, out-of-distribution detection, or production readiness.
 - Treat PCA, t-SNE, and UMAP as explanatory views. Quantitative conclusions use the
   original features and class-stratified bootstrap intervals.
 
-The full registered protocol and state live in
-[`Instructions/checklist.md`](../../Instructions/checklist.md). The machine-readable
-copy is [`configs/experiment.yaml`](configs/experiment.yaml).
+The complete repository-local protocol is [`docs/PROTOCOL.md`](docs/PROTOCOL.md), and
+the machine-readable copy is [`configs/experiment.yaml`](configs/experiment.yaml).
+The project README does not rely on private program files outside this checkout.
 
 ## Environment
 
@@ -65,6 +69,45 @@ initialization hashes match. It never silently reduces resolution, epochs, PGD s
 or restarts. Unsafe memory pressure, MPS OOM, invalid attacks, and non-finite values
 stop the run while preserving diagnostic state.
 
+## Guided notebook
+
+[`oxford_pets_adversarial_representations.ipynb`](notebooks/oxford_pets_adversarial_representations.ipynb)
+is the output-free guided interface over the same typed modules used by the CLI. It
+covers the question and claim boundary, configuration, environment, registered split,
+architecture, MPS preflight, both training arms, evaluation, representation analysis,
+reports, and the artifact inventory. It does not duplicate model, attack, or metric
+implementations inside notebook cells.
+
+Open it with this project's registered kernel:
+
+```bash
+.venv/bin/jupyter lab notebooks/oxford_pets_adversarial_representations.ipynb
+```
+
+The setup cell rejects an interpreter outside this checkout's `.venv`.
+`RUN_FULL_EXPERIMENT = False` is the default, so preflight, training, attacks,
+representation fitting, and reporting are skipped during safe inspection. Change it to
+`True`, rerun the setup cell, and then run every cell in order only when intentionally
+starting the locked experiment.
+
+For headless execution with the exact calling interpreter:
+
+```bash
+# Safe inspection; long scientific stages remain disabled.
+.venv/bin/python src/notebook_runner.py --config configs/experiment.yaml --device mps
+
+# Explicitly enable preflight and the complete scientific pipeline.
+.venv/bin/python src/notebook_runner.py --config configs/experiment.yaml --device mps --full
+```
+
+The headless safe mode overrides an edited notebook switch. Executed copies and their
+manifests are saved under ignored local `artifacts/notebooks/`; the source notebook stays
+output-free. Regenerate the canonical guide after editing its builder with:
+
+```bash
+.venv/bin/python scripts/build_notebook.py
+```
+
 ## Evidence lifecycle
 
 `setup` records the official split and hashes. `preflight` runs data, attack, parity,
@@ -73,5 +116,18 @@ atomically and is resumable only after provenance validation. `evaluate` preserv
 aligned local logits/features; `represent` calculates geometry and creates projection
 figures; `report` produces the technical report, long-form report, Sunday draft, error
 taxonomy, and a hash-complete local release manifest.
+
+## Repository map
+
+```text
+configs/          Locked machine-readable experiment settings
+docs/             Protocol, controls, hypotheses, and limitations
+notebooks/        Canonical output-free guided experiment notebook
+scripts/          Deterministic notebook generator
+src/              Typed data, model, attack, training, evaluation, and reporting code
+tests/            Correctness, provenance, CLI, MPS, progress, and notebook gates
+requirements.txt  Fully pinned Python 3.13 dependency environment
+setup_venv.sh     Isolated venv/pip setup and project kernel registration
+```
 
 No remote is configured and no public action is part of these commands.

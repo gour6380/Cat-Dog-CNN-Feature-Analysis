@@ -34,4 +34,7 @@ fi
 "$project_root/.venv/bin/python" -m pip install "${pip_options[@]}" -r "$project_root/requirements.txt"
 "$project_root/.venv/bin/python" -m pip check
 "$project_root/.venv/bin/python" -c 'import torch; assert torch.backends.mps.is_built(), "Installed PyTorch was not built with MPS"; print(f"PyTorch {torch.__version__}; MPS built={torch.backends.mps.is_built()}, available={torch.backends.mps.is_available()}")'
+"$project_root/.venv/bin/python" -m ipykernel install --prefix "$project_root/.venv" \
+    --name oxford-pets-adversarial-representations \
+    --display-name "Python (Oxford Pets Adversarial Representations)"
 printf '\nReady: %s/.venv/bin/python src/cli.py --help\n' "$project_root"

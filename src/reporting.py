@@ -252,6 +252,8 @@ Status: draft only; not approved or published.
 def _release_files(config: ExperimentConfig) -> list[Path]:
     roots = [
         config.root / "src",
+        config.root / "scripts",
+        config.root / "notebooks",
         config.root / "configs",
         config.root / "docs",
         config.project_path("artifacts"),

@@ -106,7 +106,7 @@ def tree_hash(root: Path, include: Iterable[Path]) -> str:
 
 
 def source_hash(root: Path) -> str:
-    suffixes = {".py", ".yaml", ".toml", ".md", ".in", ".txt"}
+    suffixes = {".py", ".yaml", ".toml", ".md", ".in", ".txt", ".ipynb", ".sh"}
     excluded = {".venv", ".git", "data", "weights", "checkpoints", "artifacts", "results"}
     files = [
         path
