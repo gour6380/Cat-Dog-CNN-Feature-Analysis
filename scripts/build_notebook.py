@@ -1,8 +1,11 @@
-"""Generate the canonical output-free Week 3 notebook."""
+"""Generate the output-free Cat/Dog CNN feature walkthrough."""
 
 from __future__ import annotations
 
+import argparse
 import ast
+import hashlib
+import json
 import subprocess
 import sys
 import textwrap
@@ -14,6 +17,13 @@ import nbformat
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ROOT = PROJECT_ROOT
 RUFF_CONFIG = PROJECT_ROOT / "pyproject.toml"
+SAFE_PUBLIC_FIGURE_KINDS = {
+    "kernels",
+    "activation_maximization",
+    "species_response",
+    "initial_response_change",
+    "localization_summary",
+}
 
 
 def _markdown(source: str, identifier: str) -> Any:
@@ -32,24 +42,136 @@ def _code(source: str, identifier: str, *, parameters: bool = False) -> Any:
     return cell
 
 
-def make_notebook() -> Any:
+def _public_preview_cells(
+    root: Path | None = None, *, config_sha256: str | None = None
+) -> list[Any]:
+    """Link a small, current photograph-free gallery without executing the model."""
+
+    root = ROOT if root is None else root
+    manifest_path = root / "docs/results.json"
+    if not manifest_path.is_file():
+        return []
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        figures = manifest["figures"]
+        assets = manifest["provenance"]["public_assets"]
+        recorded_config = manifest["provenance"]["configuration_sha256"]
+    except (ValueError, TypeError, KeyError, OSError):
+        return []
+    if not isinstance(figures, list) or not figures or not isinstance(assets, dict):
+        return []
+    if config_sha256 is None:
+        if str(PROJECT_ROOT) not in sys.path:
+            sys.path.insert(0, str(PROJECT_ROOT))
+        from src.config import load_config
+
+        config_sha256 = load_config(root / "configs/experiment.yaml", enforce_python=False).sha256
+    if recorded_config != config_sha256:
+        return []
+
+    selected: dict[tuple[int, str], dict[str, Any]] = {}
+    for figure in figures:
+        if (
+            not isinstance(figure, dict)
+            or figure.get("kind") not in SAFE_PUBLIC_FIGURE_KINDS
+            or figure.get("shareable") is False
+            or not isinstance(figure.get("path"), str)
+        ):
+            continue
+        relative = Path(figure["path"])
+        path = root / relative
+        if (
+            relative.is_absolute()
+            or not relative.is_relative_to(Path("docs/assets"))
+            or not path.resolve().is_relative_to((root / "docs/assets").resolve())
+            or path.is_symlink()
+            or not path.is_file()
+            or path.suffix.lower() != ".png"
+        ):
+            continue
+        expected_hash = assets.get(str(relative))
+        try:
+            actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        if not isinstance(expected_hash, str) or actual_hash != expected_hash:
+            continue
+
+        name = relative.stem.lower().replace("_", "-")
+        kind, arm = figure.get("kind"), figure.get("arm")
+        if kind == "species_response" and any(tag in name for tag in ("workflow", "architecture")):
+            key = (0, "workflow")
+        elif kind == "activation_maximization" and arm in {"standard", "adversarial"}:
+            key = (1, "0-standard" if arm == "standard" else "1-adversarial")
+        elif kind == "species_response" and "accuracy-context" in name:
+            key = (2, "accuracy")
+        elif kind == "kernels" and arm in {"standard", "adversarial"}:
+            key = (3, "0-standard" if arm == "standard" else "1-adversarial")
+        else:
+            continue
+        # One image per intended slot: no crowded dump of every registered panel.
+        selected.setdefault(key, figure)
+    if not selected:
+        return []
     cells = [
         _markdown(
             """
-            # Adversarial Representation Drift in Fine-Grained Pet Recognition
+            ### Current public-safe feature gallery — no execution needed
 
-            ## 1. Question, hypotheses, and claim boundary
+            These are saved, configuration-matched synthetic/kernel/aggregate figures, with
+            verified asset hashes. They are linked from this checkout rather than embedded as
+            code outputs. Synthetic tiles are optimized channel stimuli, not reconstructed pet
+            photographs or proof of named eye/ear detectors. Real input patches and attribution
+            overlays remain in the ignored local result companion. Separately normalized tiles
+            cannot establish absolute response strength or robustness.
 
-            **Question.** Does matched PGD adversarial fine-tuning preserve penultimate representation structure under bounded attacks better than standard fine-tuning, and how do clean-fitted confidence policies behave after input shift?
+            A gray zero-response tile can be an unsuccessful single-start stimulus
+            optimization, not a dead channel or proof that nothing was learned. Check the
+            recorded response gains and real calibration responses in `docs/results.json`
+            and the visible failure notes in `docs/results.md`; failed trials are retained.
+            """,
+            "public-feature-gallery",
+        )
+    ]
+    for key in sorted(selected):
+        figure = selected[key]
+        relative = Path(figure["path"])
+        link = (Path("..") / relative).as_posix()
+        identifier = "public-figure-" + hashlib.sha256(str(relative).encode()).hexdigest()[:12]
+        arm = str(figure.get("arm", "experiment"))
+        kind = str(figure["kind"]).replace("_", " ")
+        caption = str(figure.get("caption", "Saved public-safe figure"))
+        cell = _markdown(f"### {arm}: {kind}\n\n![{arm} {kind}]({link})\n\n{caption}", identifier)
+        cell.metadata["tags"] = ["public-safe-preview"]
+        cells.append(cell)
+    return cells
 
-            The primary decision requires both lower median clean-to-PGD cosine feature drift and higher five-nearest-neighbour breed retention for the adversarial model, with class-stratified bootstrap bounds supporting both differences. PCA, t-SNE, and UMAP are explanatory views only. The experiment cannot establish physical robustness, safe pet recognition, unrestricted adversarial robustness, or production readiness.
 
-            The next cell defaults to safe inspection. Training, attack evaluation, representation fitting, and report generation require an explicit full-mode choice.
+def make_notebook(*, include_public_figures: bool = True) -> Any:
+    cells = [
+        _markdown(
+            """
+            # Cat/Dog CNN Features: What Responds, and Where?
+
+            ## 1. Question and claim boundary
+
+            This is a learned-feature walkthrough: see low-, mid-, and high-level channel patterns,
+            connect them to parts of real cat/dog images, and examine which regions affect the
+            class score. It is not a two-dimensional embedding study.
+
+            The model predicts **cat=0, dog=1**, not the 37 breeds. Matched standard and PGD-trained
+            models let us examine the same images under a fixed digital attack. A feature picture
+            cannot prove semantic understanding, safety, or physical robustness. An attractive
+            synthetic pattern is not a real training example or a decoded memory.
+
+            The earlier breed experiment is superseded. Its numerical results are not reused.
+            The new two-class head needs matching new checkpoints and evidence.
             """,
             "question",
         ),
         _code(
             """
+            import json
             import os
             import sys
             from pathlib import Path
@@ -83,7 +205,7 @@ def make_notebook() -> Any:
             )
 
             RUN_FULL_EXPERIMENT = False
-            # Set True only to run preflight, both training arms, evaluation, analysis, and reports.
+            # True intentionally runs preflight, both arms, attacks, feature figures, and reports.
             config, RUN_FULL_EXPERIMENT, device = notebook_context(full=RUN_FULL_EXPERIMENT)
             show(
                 {
@@ -91,6 +213,7 @@ def make_notebook() -> Any:
                     "device": device,
                     "config": str(config.path.relative_to(ROOT)),
                     "config_sha256": config.sha256,
+                    "labels": {"cat": 0, "dog": 1},
                 }
             )
             """,
@@ -99,27 +222,42 @@ def make_notebook() -> Any:
         ),
         _markdown(
             """
-            ## 2. Locked protocol
+            ## 2. Editable protocol and matched comparison
 
-            Both ResNet-18 arms start from byte-identical `IMAGENET1K_V1` tensors and an identical new 37-class head. The official test partition remains untouched. The deterministic training/calibration split, attack subset, projection subset, seeds, 224-pixel transforms, configured epoch count, optimizer, learning-rate schedule, and attack budgets live in the repository configuration.
+            The YAML is the source of truth. Both ResNet-18 arms start from identical pinned
+            ImageNet weights and an identical new two-class head; they use the same ordered
+            samples, deterministic augmentations, optimizer updates, and schedule. Only the
+            training inputs differ. The configured final epoch, not the best test epoch, is compared.
+
+            Changing a valid value such as epochs is allowed and creates a new run identity.
+            Old evidence is not silently relabeled. No automatic protocol downgrade is used.
             """,
             "protocol",
         ),
         _code("show(config.raw)", "show-config"),
         _markdown(
             """
-            ## 3. Environment and native MPS
+            ## 3. Environment and native PyTorch MPS
 
-            The notebook must run with this checkout's `.venv` interpreter. PyTorch MPS is the locked training backend and silent operation fallback is disabled. This inspection reports availability but does not allocate a training model on MPS.
+            Select this checkout's `.venv/bin/python`: CPython 3.13.15, pinned `requirements.txt`,
+            PyTorch, native MPS, and tqdm. The setup uses venv/pip, not uv. Silent MPS fallback
+            is disabled. This cell inspects the runtime without starting training.
             """,
             "environment",
         ),
         _code("show(inspect_environment(config, device))", "inspect-environment"),
         _markdown(
             """
-            ## 4. Data integrity and protocol-neutral EDA
+            ## 4. Dataset and EDA
 
-            Read the registered official-data manifest and deterministic split, then visualize partition size, breed balance, species composition, and stored image geometry. EDA is descriptive only: it cannot change the split, hypotheses, checkpoint rule, attack samples, or metrics. No pet photograph is embedded in this shareable notebook.
+            Oxford-IIIT Pet has roughly 7,349 images, 37 breeds, 12 cat breeds and 25 dog breeds.
+            Learning labels are species. The official test stays intact; official `trainval` is
+            split 80/20 **within each breed** into training/calibration. Stored breed metadata
+            verifies coverage; the class-balance chart counts the actual Cat/Dog targets.
+
+            Inspect actual registered counts, species imbalance, breed coverage, image sizes, and
+            aspect ratios. Do not infer clean accuracy from class imbalance alone. Report macro
+            and per-species metrics alongside overall accuracy. EDA does not alter the split.
             """,
             "data",
         ),
@@ -131,45 +269,29 @@ def make_notebook() -> Any:
 
             data_summary = inspect_data(config)
             eda = generate_eda(config)
-            records = eda["record_summary"]
-            geometry = eda["image_geometry"]["overall"]
-            display(
-                Markdown(
-                    "\\n".join(
-                        [
-                            "### Registered-data EDA",
-                            "",
-                            "| Check | Value |",
-                            "|---|---:|",
-                            f"| Images | {records['total_unique_images']:,} |",
-                            f"| Breeds | {records['classes']} |",
-                            f"| Cat / dog breeds | {records['breeds_by_species']['cat']} / "
-                            f"{records['breeds_by_species']['dog']} |",
-                            f"| Training / calibration / official test | "
-                            f"{data_summary['training']:,} / {data_summary['calibration']:,} / "
-                            f"{data_summary['official_test']:,} |",
-                            f"| Median stored width × height | "
-                            f"{geometry['width_pixels']['median']:.0f} × "
-                            f"{geometry['height_pixels']['median']:.0f} px |",
-                            "",
-                            "The figures are aggregate diagnostics. They contain no source photograph.",
-                        ]
-                    )
-                )
-            )
-            for figure_key in ("split_and_species", "breed_balance", "image_geometry"):
-                figure_path = ROOT / eda["figures"][figure_key]
+            show(data_summary)
+            show(eda["record_summary"])
+            for figure_key, relative_path in eda["figures"].items():
+                figure_path = ROOT / relative_path
                 if not figure_path.is_file():
                     raise FileNotFoundError(figure_path)
+                display(Markdown(f"### EDA: {figure_key.replace('_', ' ')}"))
                 display(Image(filename=str(figure_path), width=1200))
             """,
             "inspect-data",
         ),
         _markdown(
             """
-            ## 5. Model and feature interface
+            ## 5. Model depth and spatial features
 
-            Construct the registered model on CPU and verify its 37 logits and original 512-dimensional penultimate feature interface. This is an architecture inspection, not a trained-model result.
+            `RGB → conv1/low network.relu → residual blocks/mid network.layer2 → high network.layer4
+            → global average pool → two-class head`.
+
+            Hooks preserve spatial channel maps at low, mid, and high stages. Early responses
+            often involve colors/edges; later stages combine larger patterns. This is a tendency,
+            not proof that an individual channel is an eye, ear, or fur detector. The 512-dimensional
+            pooled feature is still part of the classifier, but pooled embeddings are not the
+            centerpiece of this walkthrough.
             """,
             "model",
         ),
@@ -178,7 +300,10 @@ def make_notebook() -> Any:
             """
             ## 6. Native MPS preflight
 
-            Full mode records memory telemetry and checks dataset isolation, deterministic augmentation/order, identical initialization, CPU/MPS logit parity, PGD bounds, BatchNorm preservation, finite gradients, cleanup, and numerical invariants. Memory readings do not block execution; a failed correctness check stops the notebook before training and remains recorded.
+            Check data isolation, deterministic augmentation/order, identical initialization,
+            CPU/MPS logit parity, finite gradients, attack bounds, unchanged BatchNorm state during
+            attack generation, and cleanup. Memory is recorded as telemetry, not a minimum-memory
+            gate. Actual OOM, invalid attacks, and numerical failures preserve a failure record.
             """,
             "preflight",
         ),
@@ -190,7 +315,10 @@ def make_notebook() -> Any:
             """
             ## 7. Standard fine-tuning
 
-            The configured float32 epochs use clean augmented cross-entropy, micro-batch 16, two-step accumulation, AdamW, the configured warm-up, and cosine decay when training extends beyond warm-up. Epoch checkpoints and durable tqdm summaries preserve progress without consulting test results.
+            Train on clean augmented images with species cross-entropy. The reference is 15 epochs,
+            float32 MPS, micro-batch 16 and two-step accumulation, AdamW, one-epoch warm-up followed
+            by cosine decay. Configuration values remain editable. Atomic epoch checkpoints and
+            nested tqdm progress retain the configured final checkpoint without test selection.
             """,
             "standard",
         ),
@@ -202,7 +330,10 @@ def make_notebook() -> Any:
             """
             ## 8. PGD-5 adversarial fine-tuning
 
-            The matched arm changes only the training inputs: untargeted random-start PGD-5 at `L∞ 4/255`, step `1/255`, projected and clipped in raw `[0,1]` pixel space. Initialization, ordered augmentations, optimizer updates, and schedule remain matched.
+            Change only training inputs: untargeted PGD-5, `L∞ 4/255`, step `1/255`, uniform random
+            start, projection and clipping in raw `[0,1]` pixels before normalization. Match the
+            clean arm's initialization, samples, augmentations, updates, and schedule. Neither
+            prettier filters nor this finite training attack establishes unrestricted robustness.
             """,
             "adversarial",
         ),
@@ -212,9 +343,16 @@ def make_notebook() -> Any:
         ),
         _markdown(
             """
-            ## 9. Evaluation, calibration, and input shifts
+            ## 9. Attacks, corruptions, and risk-aware evaluation
 
-            Evaluate the configured final-epoch checkpoints on the official test partition, registered corruptions, and the paired 740-image FGSM/PGD-20×5 subset. Temperatures and 90%-coverage thresholds are fitted on clean calibration only. Finite attacks do not certify robustness.
+            Evaluate the full official test clean and under registered noise/blur/brightness/contrast.
+            Use 100 fixed test images per species (200 total) for paired FGSM and PGD-20×5. Report
+            clean overall/macro/per-species accuracy, robust accuracy, and attack success among
+            clean-correct images. Finite attacks are lower-bound search, not certification.
+
+            Fit temperature and 90%-coverage confidence threshold on clean calibration only.
+            Compare NLL/Brier/ECE, coverage, selective risk, and tie-aware AURC after shift without
+            refitting. Low ECE does not mean low error or a safe classifier.
             """,
             "evaluation",
         ),
@@ -224,118 +362,132 @@ def make_notebook() -> Any:
         ),
         _markdown(
             """
-            ## 10. Original-feature geometry and explanatory projections
+            ## 10. Learned filters, real image parts, and attribution
 
-            Quantitative evidence uses aligned original 512-D features: cosine and relative-L2 drift, five-NN retention, nearest centroids, scatter, margins, linear CKA, and class-stratified uncertainty. PCA, t-SNE, UMAP, and difficult-pair boundary slices are explanatory and are never compared by raw coordinates across independently fitted model views.
+            Channels are chosen on **clean calibration**, before inspecting fixed test anchors:
+            two cats and two dogs. The figure manifest records their IDs and settings.
+
+            **Read the pictures in this order:**
+
+            1. **conv1 kernels:** actual learned RGB weights. They are not maps of the pet input.
+            2. **Low/mid/high activation maximization:** synthetic inputs optimized to excite a
+               selected channel. They show a possible high-response stimulus, not a training memory.
+            3. **Top real calibration patches:** high-response locations plus receptive-field boxes
+               connect channels to real image regions. A late theoretical field can exceed the
+               whole image; the clipped box is possible support, not equal pixel importance.
+            4. **Anchor activation maps and input-gradient sensitivity:** activation locates response;
+               gradient locates local sensitivity. They answer different questions.
+            5. **Grad-CAM and occlusion:** Grad-CAM targets the **true-species logit**; occlusion
+               measures the drop in the **true-species-vs-other logit margin** after masking a
+               region. These are related but distinct scalar objectives: agreement does not
+               exactly validate the same score. Targets stay fixed even on misclassified inputs.
+               Masking can create out-of-distribution inputs; neither proves causal learning.
+            6. **Randomized-weight control and aggregate response charts:** explanation should depend
+               on learned parameters. A changed control is necessary evidence, not proof of validity.
+               Compare saved response numbers, not brightness from separately normalized panels.
+
+            These figures explain present model behavior. They cannot identify which original
+            training image or causal learning event created a filter. No named eye/ear/fur detector
+            is verified merely because a picture looks familiar.
+
+            The next cell computes this stage in full mode, or reads only already saved,
+            configuration-matched figures in safe mode. Missing binary evidence is never filled
+            with an old breed plot. Photo-containing outputs remain local and ignored.
             """,
-            "representations",
+            "feature-walkthrough",
         ),
         _code(
             """
-            from IPython.display import Image, Markdown, display
+            import hashlib
 
-            representation_result = run_stage(
+            feature_result = run_stage(
                 config,
                 "represent",
                 full=RUN_FULL_EXPERIMENT,
                 device=device,
             )
+            feature_manifest = ROOT / "results/generated/feature_visualizations.json"
             if (
-                isinstance(representation_result, dict)
-                and representation_result.get("results_available") is False
+                isinstance(feature_result, dict)
+                and feature_result.get("results_available") is False
             ):
-                show(representation_result)
-            else:
-                if not isinstance(representation_result, dict):
-                    raise TypeError("representation stage returned an invalid result")
-                primary = representation_result["primary_hypothesis"]
-                geometry = representation_result["geometry"]
-                standard = geometry["standard"]
-                adversarial = geometry["adversarial"]
-                verdict = "supported" if primary["primary_supported"] else "not supported"
-                lines = [
-                    f"### Registered representation result: **{verdict}**",
-                    "",
-                    f"Configured checkpoint: **epoch {config.integer('training', 'epochs')}**. "
-                    "Lower drift is better; higher neighbour retention and CKA are better.",
-                    "",
-                    "| Original 512-D metric | Standard | PGD-trained |",
-                    "|---|---:|---:|",
-                    f"| Median cosine drift | {standard['cosine_drift']['median']:.4f} | "
-                    f"{adversarial['cosine_drift']['median']:.4f} |",
-                    f"| Median relative-L2 drift | {standard['relative_l2_drift']['median']:.4f} | "
-                    f"{adversarial['relative_l2_drift']['median']:.4f} |",
-                    f"| Clean 5-NN accuracy | {standard['knn']['clean_accuracy']:.2%} | "
-                    f"{adversarial['knn']['clean_accuracy']:.2%} |",
-                    f"| PGD 5-NN accuracy | {standard['knn']['pgd_accuracy']:.2%} | "
-                    f"{adversarial['knn']['pgd_accuracy']:.2%} |",
-                    f"| PGD 5-NN breed retention | {standard['knn']['pgd_retention']:.2%} | "
-                    f"{adversarial['knn']['pgd_retention']:.2%} |",
-                    f"| Clean→PGD linear CKA | {standard['linear_cka_clean_to_pgd']:.4f} | "
-                    f"{adversarial['linear_cka_clean_to_pgd']:.4f} |",
-                    "",
-                    "The decision above is the registered numerical test. The figures below are "
-                    "explanatory views and cannot establish robustness by themselves.",
-                ]
-                display(Markdown("\\n".join(lines)))
+                if feature_manifest.is_file():
+                    feature_result = json.loads(feature_manifest.read_text(encoding="utf-8"))
+                else:
+                    show(feature_result)
 
-                figure_groups = [
-                    (
-                        "Quantitative geometry",
-                        "Original-space drift and per-breed local label retention.",
-                        [
-                            "figures/generated/geometry/cosine-drift.png",
-                            "figures/generated/geometry/knn-retention-by-breed.png",
-                        ],
-                    ),
-                    (
-                        "PCA views",
-                        "PCA is fitted independently on each model's clean calibration features.",
-                        [
-                            "figures/generated/projections/pca-standard.png",
-                            "figures/generated/projections/pca-adversarial.png",
-                        ],
-                    ),
-                    (
-                        "t-SNE views",
-                        "Clean and PGD features are embedded jointly within each model only.",
-                        [
-                            "figures/generated/projections/tsne-standard.png",
-                            "figures/generated/projections/tsne-adversarial.png",
-                        ],
-                    ),
-                    (
-                        "UMAP views",
-                        "Each UMAP is fitted on that model's clean calibration features.",
-                        [
-                            "figures/generated/projections/umap-standard.png",
-                            "figures/generated/projections/umap-adversarial.png",
-                        ],
-                    ),
-                    (
-                        "Difficult-pair boundary slices",
-                        "These are two-class slices of the 37-class head, not input-space boundaries.",
-                        [
-                            "figures/generated/boundaries/pair-boundary-standard.png",
-                            "figures/generated/boundaries/pair-boundary-adversarial.png",
-                        ],
-                    ),
-                ]
-                for title, caption, relative_paths in figure_groups:
-                    display(Markdown(f"### {title}\\n\\n{caption}"))
-                    for relative_path in relative_paths:
-                        figure_path = ROOT / relative_path
-                        if not figure_path.is_file():
-                            raise FileNotFoundError(figure_path)
-                        display(Image(filename=str(figure_path), width=1100))
+            if isinstance(feature_result, dict) and "figures" in feature_result:
+                if feature_result.get("config_sha256") != config.sha256:
+                    raise RuntimeError("Saved feature figures belong to a different configuration")
+                figures = feature_result["figures"]
+                if not isinstance(figures, list):
+                    raise TypeError("Feature manifest figures must be a list")
+                display(
+                    Markdown(
+                        "### Saved learned-feature walkthrough\\n\\n"
+                        f"Evidence completed: {feature_result.get('created_at', 'not recorded')}. "
+                        "Pet-photo panels are local-only; source guide stays output-free."
+                    )
+                )
+                for figure in figures:
+                    if not isinstance(figure, dict) or not isinstance(figure.get("path"), str):
+                        raise TypeError("Invalid feature figure record")
+                    figure_path = (ROOT / figure["path"]).resolve()
+                    if not figure_path.is_relative_to(ROOT) or not figure_path.is_file():
+                        show(
+                            {
+                                "status": "stale feature evidence",
+                                "figure": figure["path"],
+                                "reason": "figure is missing or outside the project",
+                            }
+                        )
+                        continue
+                    expected_sha256 = figure.get("sha256")
+                    try:
+                        current_sha256 = hashlib.sha256(figure_path.read_bytes()).hexdigest()
+                    except OSError as error:
+                        show(
+                            {
+                                "status": "stale feature evidence",
+                                "figure": figure["path"],
+                                "reason": f"figure cannot be read: {error}",
+                            }
+                        )
+                        continue
+                    if not isinstance(expected_sha256, str) or current_sha256 != expected_sha256:
+                        show(
+                            {
+                                "status": "stale feature evidence",
+                                "figure": figure["path"],
+                                "reason": "recorded figure hash is missing or mismatched",
+                            }
+                        )
+                        continue
+                    sharing = "aggregate/synthetic export candidate" if figure.get("shareable") else "local-only"
+                    display(
+                        Markdown(
+                            f"### {figure.get('arm', '')}: {figure.get('kind', 'feature view')}\\n\\n"
+                            f"{figure.get('caption', '')}\\n\\nSharing: **{sharing}**."
+                        )
+                    )
+                    display(Image(filename=str(figure_path), width=1200))
+                show(feature_result.get("limitations", []))
             """,
-            "run-representations",
+            "run-features",
         ),
         _markdown(
             """
-            ## 11. Reports, limitations, and artifact inventory
+            ## 11. Reports, interpretation, and local artifact inventory
 
-            Reports are generated only from complete, matching machine-readable evidence. Safe mode shows existing setup metadata while unavailable scientific results remain explicitly skipped. Executed notebook copies stay under ignored local artifacts; this source notebook remains output-free.
+            Reports must use complete matching binary evidence. Interpret actual channel responses
+            and class-score changes separately from possible semantic stories. One model pair,
+            one split/seed family, ImageNet pretraining, selected anchors, explanation-method limits,
+            and finite attacks constrain conclusions.
+
+            A completed picture-rich local result companion is saved under `reports/generated/`
+            and can be read without rerunning training. It contains real photographs and remains
+            ignored. Only reviewed aggregate charts/synthetic features may be exported publicly.
+            Do not save this executed guide over the tracked output-free source.
             """,
             "report",
         ),
@@ -354,18 +506,30 @@ def make_notebook() -> Any:
         ),
         _markdown(
             """
-            ## 12. Reproduction
+            ## 12. Reproduction and references
 
-            Interactive full run: change `RUN_FULL_EXPERIMENT = False` to `True`, rerun the setup cell, then run every following cell in order. Headless safe run: `.venv/bin/python src/notebook_runner.py --device mps`. Headless full run: add `--full`. The canonical CLI remains `.venv/bin/python src/cli.py reproduce --config configs/experiment.yaml --device mps`.
+            Full run: deliberately set `RUN_FULL_EXPERIMENT = True`, rerun setup, then run cells
+            in order. CLI: `.venv/bin/python src/cli.py reproduce --config configs/experiment.yaml
+            --device mps`. Existing checkpoint/evidence reuse requires matching provenance.
+
+            [Lee et al. 2009](https://ai.stanford.edu/~ang/papers/icml09-ConvolutionalDeepBeliefNetworks.pdf)
+            inspires the low-to-high illustration; this discriminative ResNet does **not** reproduce
+            their generative convolutional deep belief network. Original method references:
+            [Zeiler/Fergus](https://arxiv.org/abs/1311.2901),
+            [Grad-CAM](https://arxiv.org/abs/1610.02391),
+            [Adebayo sanity checks](https://arxiv.org/abs/1810.03292), and
+            [Distill Feature Visualization](https://distill.pub/2017/feature-visualization/).
             """,
             "reproduction",
         ),
     ]
+    if include_public_figures:
+        cells.extend(_public_preview_cells())
     notebook = nbformat.v4.new_notebook(
         cells=cells,
         metadata={
             "kernelspec": {
-                "display_name": "Python (Oxford Pets Adversarial Representations)",
+                "display_name": "Python (Oxford Pets Cat/Dog CNN Features)",
                 "language": "python",
                 "name": "oxford-pets-adversarial-representations",
             },
@@ -376,9 +540,9 @@ def make_notebook() -> Any:
     return notebook
 
 
-def build() -> Path:
-    notebook = make_notebook()
-    output = ROOT / "notebooks" / "oxford_pets_adversarial_representations.ipynb"
+def build(*, include_public_figures: bool = True) -> Path:
+    notebook = make_notebook(include_public_figures=include_public_figures)
+    output = ROOT / "notebooks" / "cat_dog_cnn_features.ipynb"
     output.parent.mkdir(parents=True, exist_ok=True)
     nbformat.write(notebook, output)
     for arguments in (
@@ -387,15 +551,7 @@ def build() -> Path:
         ["check"],
     ):
         subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "ruff",
-                *arguments,
-                "--config",
-                str(RUFF_CONFIG),
-                str(output),
-            ],
+            [sys.executable, "-m", "ruff", *arguments, "--config", str(RUFF_CONFIG), str(output)],
             cwd=ROOT,
             check=True,
         )
@@ -403,4 +559,9 @@ def build() -> Path:
 
 
 if __name__ == "__main__":
-    print(build())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--no-public-preview", action="store_true", help="omit the saved public-safe figure gallery"
+    )
+    arguments = parser.parse_args()
+    print(build(include_public_figures=not arguments.no_public_preview))

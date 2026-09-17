@@ -82,13 +82,13 @@ def inspect_data(config: ExperimentConfig) -> dict[str, Any]:
     if not isinstance(manifest_raw, dict):
         raise RuntimeError("data manifest is invalid")
     manifest = cast(dict[str, Any], manifest_raw)
-    return {
+    result = {
         "training": len(splits["training"]),
         "calibration": len(splits["calibration"]),
         "official_test": len(splits["test"]),
         "attack_subset": len(splits["attack"]),
-        "projection_subset": len(splits["projection"]),
         "classes": classes,
+        "label_mode": config.label_mode,
         "training_per_class": _per_class(splits["training"], classes),
         "calibration_per_class": _per_class(splits["calibration"], classes),
         "test_per_class": _per_class(splits["test"], classes),
@@ -96,6 +96,16 @@ def inspect_data(config: ExperimentConfig) -> dict[str, Any]:
         "split_sha256": manifest.get("split_sha256"),
         "official_test_preserved": True,
     }
+    if config.label_mode == "species":
+        result["feature_calibration_selection"] = (
+            config.integer("feature_visualization", "calibration_per_class") * classes
+        )
+        result["fixed_feature_anchors"] = (
+            config.integer("feature_visualization", "anchors_per_class") * classes
+        )
+    else:
+        result["projection_subset"] = len(splits["projection"])
+    return result
 
 
 def inspect_model(config: ExperimentConfig) -> dict[str, Any]:
@@ -162,9 +172,9 @@ def run_stage(
 
             result = evaluate(config, require_device(device), progress=progress)
         elif stage == "represent":
-            from src.representations import represent
+            from src.feature_visualization import visualize_features
 
-            result = represent(config, progress=progress)
+            result = visualize_features(config, require_device(device), progress=progress)
         elif stage == "report":
             from src.reporting import report
 

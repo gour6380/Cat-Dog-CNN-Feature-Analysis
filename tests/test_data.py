@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -13,13 +14,16 @@ from src.config import ExperimentConfig
 from src.data import (
     DataError,
     SampleRecord,
+    create_data_manifests,
     deterministic_eval_transform,
     deterministic_train_transform,
     epoch_order,
     load_registered_splits,
+    parse_official_split,
     split_payload_hash,
     stratified_hash_selection,
     stratified_train_calibration_split,
+    validate_records,
 )
 
 
@@ -155,3 +159,114 @@ def test_registered_split_is_scoped_to_data_settings_not_full_config(tmp_path: P
     stale = ExperimentConfig(changed.path, changed.root, stale_raw, "another-full-config")
     with pytest.raises(DataError, match="run setup again"):
         load_registered_splits(stale)
+
+
+def test_species_targets_preserve_per_breed_train_calibration_split() -> None:
+    breeds = _records(classes=4)
+    binary = [replace(record, label=record.species, breed_label=record.label) for record in breeds]
+    training, calibration = stratified_train_calibration_split(binary, 0.8, "seed")
+    assert {record.label for record in training} == {0, 1}
+    for breed_label in range(4):
+        assert sum(record.breed_label == breed_label for record in training) == 8
+        assert sum(record.breed_label == breed_label for record in calibration) == 2
+    original = stratified_train_calibration_split(breeds, 0.8, "seed")
+    assert [[record.sample_id for record in part] for part in original] == [
+        [record.sample_id for record in part] for part in (training, calibration)
+    ]
+
+
+def test_species_fixed_subsets_are_target_class_balanced_and_deterministic() -> None:
+    records = [
+        replace(record, label=record.species, breed_label=record.label)
+        for record in _records(classes=4)
+    ]
+    selected = stratified_hash_selection(records, 7, "binary-selection")
+    repeat = stratified_hash_selection(list(reversed(records)), 7, "binary-selection")
+    assert selected == repeat
+    assert [sum(record.label == target for record in selected) for target in range(2)] == [7, 7]
+    projection = stratified_hash_selection(selected, 3, "binary-projection")
+    assert [sum(record.label == target for record in projection) for target in range(2)] == [3, 3]
+    assert {record.sample_id for record in projection} <= {record.sample_id for record in selected}
+
+
+def _tiny_official_data(tmp_path: Path) -> ExperimentConfig:
+    data_root = tmp_path / "data" / "oxford-iiit-pet"
+    annotations = data_root / "annotations"
+    images = data_root / "images"
+    annotations.mkdir(parents=True)
+    images.mkdir()
+    for split in ("trainval", "test"):
+        lines = []
+        for breed in range(4):
+            for index in range(10):
+                image_number = index + (10 if split == "test" else 0)
+                sample_id = f"breed{breed}_{image_number}"
+                Image.new("RGB", (8, 8), (breed * 40, index * 20, 80)).save(
+                    images / f"{sample_id}.jpg"
+                )
+                # Official annotations are 1-based for both breed and species.
+                lines.append(f"{sample_id} {breed + 1} {breed % 2 + 1} {breed + 1}")
+        (annotations / f"{split}.txt").write_text("\n".join(lines), encoding="utf-8")
+    raw: dict[str, Any] = {
+        "paths": {"data": "data", "artifacts": "artifacts"},
+        "dataset": {
+            "label_mode": "species",
+            "expected_trainval": 40,
+            "expected_test": 40,
+            "classes": 2,
+            "train_fraction": 0.8,
+            "split_seed": "split",
+            "attack_per_class": 7,
+            "projection_per_class": 3,
+            "selection_seed": "selection",
+        },
+    }
+    return ExperimentConfig(tmp_path / "configs" / "experiment.yaml", tmp_path, raw, "binary")
+
+
+def test_official_species_mapping_retains_original_breed_identity(tmp_path: Path) -> None:
+    config = _tiny_official_data(tmp_path)
+    breed_records = parse_official_split(config.project_path("data"), "trainval")
+    species_records = parse_official_split(
+        config.project_path("data"), "trainval", label_mode="species"
+    )
+    assert {record.label for record in breed_records} == {0, 1, 2, 3}
+    assert {record.label for record in species_records} == {0, 1}
+    for breed, species in zip(breed_records, species_records, strict=True):
+        assert species.label == species.species
+        assert species.breed_label == breed.label == breed.breed_label
+        assert species.breed_name == breed.breed_name
+        assert species.image_path == breed.image_path
+
+
+def test_species_setup_and_round_trip_record_target_identity(tmp_path: Path) -> None:
+    config = _tiny_official_data(tmp_path)
+    manifest = create_data_manifests(config)
+    splits = load_registered_splits(config)
+    assert manifest["label_mode"] == "species"
+    assert manifest["integrity"]["label_to_name"] == {"0": "cat", "1": "dog"}
+    assert manifest["integrity"]["breed_count"] == 4
+    assert manifest["training_count"] == 32
+    assert manifest["calibration_count"] == 8
+    assert len(splits["attack"]) == 14
+    assert len(splits["projection"]) == 6
+    path = config.project_path("artifacts") / "data" / "splits.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["label_mode"] == "species"
+    assert payload["train_calibration_stratification"] == "breed"
+    assert payload["fixed_subset_stratification"] == "target_class"
+
+    changed_raw = deepcopy(config.raw)
+    changed_raw["dataset"]["label_mode"] = "breed"
+    changed = ExperimentConfig(config.path, config.root, changed_raw, "breed")
+    with pytest.raises(DataError, match="target label mode changed; run setup again"):
+        load_registered_splits(changed)
+
+
+def test_species_integrity_rejects_wrong_target_mapping(tmp_path: Path) -> None:
+    config = _tiny_official_data(tmp_path)
+    trainval = parse_official_split(config.project_path("data"), "trainval", label_mode="species")
+    test = parse_official_split(config.project_path("data"), "test", label_mode="species")
+    broken = [replace(trainval[0], label=1 - trainval[0].species), *trainval[1:]]
+    with pytest.raises(DataError, match="species target labels must equal species metadata"):
+        validate_records(broken, test, config)

@@ -34,6 +34,7 @@ class SampleRecord:
     species: int
     breed_name: str
     official_split: Literal["trainval", "test"]
+    breed_label: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -59,7 +60,16 @@ def _breed_name(sample_id: str) -> str:
     return re.sub(r"_\d+$", "", sample_id)
 
 
-def parse_official_split(data_root: Path, split: Literal["trainval", "test"]) -> list[SampleRecord]:
+def parse_official_split(
+    data_root: Path,
+    split: Literal["trainval", "test"],
+    *,
+    label_mode: Literal["breed", "species"] = "breed",
+) -> list[SampleRecord]:
+    """Read official labels, retaining breed identity even for binary training."""
+
+    if label_mode not in {"breed", "species"}:
+        raise DataError("label_mode must be breed or species")
     annotation = _annotation_root(data_root) / f"{split}.txt"
     if not annotation.is_file():
         raise DataError(f"missing official annotation: {annotation}")
@@ -76,14 +86,19 @@ def parse_official_split(data_root: Path, split: Literal["trainval", "test"]) ->
         image_path = images / f"{sample_id}.jpg"
         if not image_path.is_file():
             raise DataError(f"annotation references missing image: {image_path}")
+        breed_label = int(class_text) - 1
+        species = int(species_text) - 1
+        if not 0 <= breed_label < 37 or species not in {0, 1}:
+            raise DataError(f"invalid class/species identifier in {annotation.name}:{line_number}")
         records.append(
             SampleRecord(
                 sample_id=sample_id,
                 image_path=str(image_path.resolve()),
-                label=int(class_text) - 1,
-                species=int(species_text) - 1,
+                label=species if label_mode == "species" else breed_label,
+                species=species,
                 breed_name=_breed_name(sample_id),
                 official_split=split,
+                breed_label=breed_label,
             )
         )
     return records
@@ -98,14 +113,16 @@ def stratified_train_calibration_split(
 ) -> tuple[list[SampleRecord], list[SampleRecord]]:
     """Split each breed by a filename-derived stable hash."""
 
-    grouped: dict[int, list[SampleRecord]] = defaultdict(list)
+    # Breed stratification remains unchanged when the prediction target is
+    # binary; otherwise a species-level split could underrepresent a breed.
+    grouped: dict[str, list[SampleRecord]] = defaultdict(list)
     for record in records:
-        grouped[record.label].append(record)
+        grouped[record.breed_name].append(record)
     training: list[SampleRecord] = []
     calibration: list[SampleRecord] = []
-    for label in sorted(grouped):
+    for breed_name in sorted(grouped):
         ranked = sorted(
-            grouped[label], key=lambda item: (_rank(seed, item.sample_id), item.sample_id)
+            grouped[breed_name], key=lambda item: (_rank(seed, item.sample_id), item.sample_id)
         )
         calibration_count = max(1, int(round(len(ranked) * (1.0 - train_fraction))))
         calibration.extend(ranked[:calibration_count])
@@ -157,16 +174,38 @@ def validate_records(
     train_labels = {record.label for record in trainval}
     test_labels = {record.label for record in test}
     if train_labels != expected_labels or test_labels != expected_labels:
-        raise DataError("not all 37 class identifiers occur in both official partitions")
+        raise DataError("not all configured target class identifiers occur in both partitions")
     label_to_name: dict[int, str] = {}
+    breed_metadata: dict[str, tuple[int | None, int]] = {}
     for record in [*trainval, *test]:
-        previous = label_to_name.setdefault(record.label, record.breed_name)
-        if previous != record.breed_name:
-            raise DataError(f"label {record.label} maps to multiple breed names")
+        if record.species not in {0, 1}:
+            raise DataError(f"sample {record.sample_id} has invalid species metadata")
+        if config.label_mode == "species":
+            if record.label != record.species:
+                raise DataError("species target labels must equal species metadata (cat=0, dog=1)")
+            label_name = ("cat", "dog")[record.label]
+        else:
+            if record.breed_label is not None and record.label != record.breed_label:
+                raise DataError("breed target labels must equal retained breed identifiers")
+            label_name = record.breed_name
+        previous = label_to_name.setdefault(record.label, label_name)
+        if previous != label_name:
+            raise DataError(f"label {record.label} maps to multiple target names")
+        metadata = (record.breed_label, record.species)
+        if breed_metadata.setdefault(record.breed_name, metadata) != metadata:
+            raise DataError(f"breed {record.breed_name} has inconsistent annotation metadata")
+    if {item.breed_name for item in trainval} != {item.breed_name for item in test}:
+        raise DataError("breed coverage differs between official partitions")
     return {
         "trainval_count": len(trainval),
         "test_count": len(test),
         "class_count": len(expected_labels),
+        "label_mode": config.label_mode,
+        "breed_count": len(breed_metadata),
+        "breed_metadata": {
+            name: {"breed_label": metadata[0], "species": metadata[1]}
+            for name, metadata in sorted(breed_metadata.items())
+        },
         "trainval_per_class": dict(sorted(Counter(item.label for item in trainval).items())),
         "test_per_class": dict(sorted(Counter(item.label for item in test).items())),
         "label_to_name": {str(key): value for key, value in sorted(label_to_name.items())},
@@ -195,8 +234,8 @@ def split_payload_hash(payload: dict[str, Any]) -> str:
 
 def create_data_manifests(config: ExperimentConfig) -> dict[str, Any]:
     data_root = config.project_path("data")
-    trainval = parse_official_split(data_root, "trainval")
-    test = parse_official_split(data_root, "test")
+    trainval = parse_official_split(data_root, "trainval", label_mode=config.label_mode)
+    test = parse_official_split(data_root, "test", label_mode=config.label_mode)
     integrity = validate_records(trainval, test, config)
     training, calibration = stratified_train_calibration_split(
         trainval,
@@ -225,9 +264,13 @@ def create_data_manifests(config: ExperimentConfig) -> dict[str, Any]:
         config.value("dataset", "selection_seed", str) + ":projection",
     )
     split_payload: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now(),
         "config_sha256": config.sha256,
+        "label_mode": config.label_mode,
+        "target_classes": class_count,
+        "train_calibration_stratification": "breed",
+        "fixed_subset_stratification": "target_class",
         "split_seed": config.value("dataset", "split_seed", str),
         "selection_seed": config.value("dataset", "selection_seed", str),
         "training": [item.to_json() for item in training],
@@ -243,10 +286,11 @@ def create_data_manifests(config: ExperimentConfig) -> dict[str, Any]:
     annotation_root = _annotation_root(data_root)
     dataset_hash = dataset_content_hash([*trainval, *test])
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now(),
         "source": "Oxford-IIIT Pet official images and annotations via Torchvision",
         "license": "CC BY-SA 4.0 dataset; original image copyrights retained",
+        "label_mode": config.label_mode,
         "integrity": integrity,
         "training_count": len(training),
         "calibration_count": len(calibration),
@@ -285,6 +329,8 @@ def load_registered_splits(config: ExperimentConfig) -> dict[str, list[SampleRec
     expected = payload.get("split_sha256")
     if split_payload_hash(payload) != expected:
         raise DataError("registered split manifest hash is invalid")
+    if payload.get("label_mode", "breed") != config.label_mode:
+        raise DataError("configured target label mode changed; run setup again")
     training = _records_from_json(payload.get("training"))
     calibration = _records_from_json(payload.get("calibration"))
     test = _records_from_json(payload.get("test"))
@@ -303,6 +349,10 @@ def load_registered_splits(config: ExperimentConfig) -> dict[str, list[SampleRec
         record.label for record in test
     } != set(range(classes)):
         raise DataError("configured dataset classes changed; run setup again")
+    if config.label_mode == "species" and any(
+        record.label != record.species for record in [*trainval, *test]
+    ):
+        raise DataError("registered species target mapping is invalid; run setup again")
     expected_training, expected_calibration = stratified_train_calibration_split(
         trainval,
         config.number("dataset", "train_fraction"),

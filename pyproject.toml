@@ -1,7 +1,7 @@
 [project]
 name = "oxford-pets-adversarial-representations"
-version = "0.1.0"
-description = "Matched ResNet-18 study of adversarial representation drift in Oxford-IIIT Pet"
+version = "0.2.0"
+description = "Cat/dog CNN feature visualization, localization, and finite-attack comparison"
 requires-python = "==3.13.15"
 
 [tool.pytest.ini_options]

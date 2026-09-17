@@ -1,7 +1,7 @@
 experiment:
-  id: oxford-pets-adversarial-representations-v1
-  title: Adversarial Representation Drift in Fine-Grained Pet Recognition
-  created_at: "2026-09-14T12:49:00+05:30"
+  id: cat-dog-cnn-feature-visualization-v2
+  title: Cat and Dog CNN Feature Learning and Localization
+  created_at: "2026-09-17T16:49:00+05:30"
   expected_python: "3.13.15"
   public_actions_authorized: false
 
@@ -18,17 +18,18 @@ dataset:
   name: Oxford-IIIT Pet
   expected_trainval: 3680
   expected_test: 3669
-  classes: 37
+  label_mode: species
+  classes: 2
   train_fraction: 0.8
   split_seed: oxford-pets-split-20260914
-  attack_per_class: 20
-  projection_per_class: 10
+  attack_per_class: 100
+  projection_per_class: 10  # Historical helper compatibility; unused by the active feature stage.
   selection_seed: oxford-pets-selection-20260914
 
 model:
   architecture: resnet18
   weights: IMAGENET1K_V1
-  classes: 37
+  classes: 2
   feature_dim: 512
   initialization_seed: 20260915
 
@@ -76,6 +77,9 @@ calibration:
   ece_bins: 15
   temperature_bounds: [0.05, 20.0]
 
+# Superseded embedding-helper settings. The active CLI/notebook does not execute
+# PCA, t-SNE, UMAP, neighbour retention, or a representation bootstrap. Retained
+# as inert compatibility fields so the recorded binary run identity stays stable.
 representations:
   neighbours: 5
   bootstrap_replicates: 2000
@@ -91,3 +95,18 @@ representations:
 preflight:
   parity_atol: 0.0001
   parity_rtol: 0.0001
+
+feature_visualization:
+  layers: [network.relu, network.layer2, network.layer4]
+  channels_per_layer: 6
+  calibration_per_class: 32
+  anchors_per_class: 2
+  seed: 20260917
+  activation_maximization_steps: 80
+  activation_maximization_learning_rate: 0.05
+  total_variation_weight: 0.0005
+  pixel_l2_weight: 0.001
+  occlusion_patch_size: 32
+  occlusion_stride: 32
+  top_occlusion_tiles: 4
+  random_occlusion_repeats: 100

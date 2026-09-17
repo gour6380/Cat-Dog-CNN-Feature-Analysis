@@ -4,17 +4,22 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import torch
 import yaml  # type: ignore[import-untyped]
+from torchvision.models import resnet18
 
 from src.config import ConfigError, load_config
+from src.model import build_model, initialization_manifest, state_dict_hash
 
 CONFIG = Path(__file__).parents[1] / "configs" / "experiment.yaml"
 
 
 def test_registered_config_loads() -> None:
     config = load_config(CONFIG)
-    assert config.value("experiment", "id", str) == "oxford-pets-adversarial-representations-v1"
-    assert config.integer("dataset", "classes") == 37
+    assert config.value("experiment", "id", str)
+    assert config.label_mode == "species"
+    assert config.integer("dataset", "classes") == 2
+    assert config.integer("model", "classes") == 2
 
 
 def test_default_attack_values() -> None:
@@ -51,7 +56,7 @@ def test_memory_telemetry_has_no_configured_stop_thresholds() -> None:
 
 def _write_config(tmp_path: Path, raw: dict[str, Any]) -> Path:
     path = tmp_path / "configs" / "experiment.yaml"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     return path
 
@@ -84,3 +89,69 @@ def test_invalid_ranges_still_fail_early(tmp_path: Path) -> None:
     cast(dict[str, Any], raw["training"])["epochs"] = 0
     with pytest.raises(ConfigError, match="training.epochs must be positive"):
         load_config(_write_config(tmp_path, raw))
+
+
+def test_species_label_mode_uses_binary_targets(tmp_path: Path) -> None:
+    raw = cast(dict[str, Any], yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
+    raw["dataset"]["label_mode"] = "species"
+    raw["dataset"]["classes"] = 2
+    raw["model"]["classes"] = 2
+    config = load_config(_write_config(tmp_path, raw))
+    assert config.label_mode == "species"
+    assert config.integer("model", "classes") == 2
+
+
+def test_breed_label_mode_remains_supported(tmp_path: Path) -> None:
+    raw = cast(dict[str, Any], yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
+    raw["dataset"].pop("label_mode", None)
+    raw["dataset"]["classes"] = 37
+    raw["model"]["classes"] = 37
+    assert load_config(_write_config(tmp_path, raw)).label_mode == "breed"
+
+
+@pytest.mark.parametrize("mode", ["other", None, ["species"]])
+def test_invalid_target_label_mode_is_actionable(tmp_path: Path, mode: object) -> None:
+    raw = cast(dict[str, Any], yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
+    raw["dataset"]["label_mode"] = mode
+    with pytest.raises(ConfigError, match="dataset.label_mode must be breed or species"):
+        load_config(_write_config(tmp_path, raw))
+
+
+def test_species_mode_cannot_keep_a_breed_classifier(tmp_path: Path) -> None:
+    raw = cast(dict[str, Any], yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
+    raw["dataset"]["label_mode"] = "species"
+    raw["dataset"]["classes"] = 37
+    raw["model"]["classes"] = 37
+    with pytest.raises(ConfigError, match="species targets use two classes"):
+        load_config(_write_config(tmp_path, raw))
+
+
+def test_binary_head_initialization_is_matched_and_distinct_from_breeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = cast(dict[str, Any], yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
+    raw["dataset"]["label_mode"] = "species"
+    raw["dataset"]["classes"] = 2
+    raw["model"]["classes"] = 2
+    config = load_config(_write_config(tmp_path, raw))
+    # A local untrained base stands in for the official weights so this unit
+    # test performs no download, training, or data access.
+    base = resnet18(weights=None).state_dict()
+    monkeypatch.setattr("src.model.load_pretrained_state", lambda _config: base)
+    before_rng = torch.get_rng_state().clone()
+    first = build_model(config)
+    second = build_model(config)
+    assert torch.equal(before_rng, torch.get_rng_state())
+    assert first.classifier.out_features == 2
+    assert first.classifier.in_features == 512
+    first_hash = state_dict_hash(first.state_dict())
+    assert state_dict_hash(second.state_dict()) == first_hash
+    manifest = initialization_manifest(config)
+    assert manifest["state_sha256"] == first_hash
+    assert manifest["label_mode"] == "species"
+    assert manifest["target_names"] == ["cat", "dog"]
+    assert manifest["classes"] == 2
+    config.raw["dataset"]["label_mode"] = "breed"
+    config.raw["dataset"]["classes"] = 37
+    config.raw["model"]["classes"] = 37
+    assert state_dict_hash(build_model(config).state_dict()) != first_hash

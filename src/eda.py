@@ -69,12 +69,20 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
     counts_by_split: dict[str, int] = {}
     species_by_split: dict[str, dict[str, int]] = {}
     per_split_labels: dict[str, Counter[int]] = {}
+    per_split_breeds: dict[str, Counter[str]] = {}
+    breed_species: dict[str, int] = {}
+    species_targets = classes == 2 and all(
+        record.label == record.species
+        for split in PRIMARY_SPLITS
+        for record in _records_for(splits, split)
+    )
 
     for split in PRIMARY_SPLITS:
         records = _records_for(splits, split)
         counts_by_split[split] = len(records)
         species_counts: Counter[int] = Counter()
         label_counts: Counter[int] = Counter()
+        breed_counts_for_split: Counter[str] = Counter()
         for record in records:
             if record.sample_id in seen_ids:
                 raise EDAError(f"sample occurs in more than one EDA split: {record.sample_id}")
@@ -83,22 +91,28 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
                 raise EDAError(f"invalid class label in registered split: {record.label}")
             if record.species not in SPECIES_NAMES:
                 raise EDAError(f"invalid species label in registered split: {record.species}")
-            previous_name = label_names.setdefault(record.label, record.breed_name)
+            target_name = SPECIES_NAMES[record.species] if species_targets else record.breed_name
+            previous_name = label_names.setdefault(record.label, target_name)
             previous_species = label_species.setdefault(record.label, record.species)
-            if previous_name != record.breed_name or previous_species != record.species:
+            if previous_name != target_name or previous_species != record.species:
                 raise EDAError(f"class {record.label} has inconsistent breed metadata")
+            prior_species = breed_species.setdefault(record.breed_name, record.species)
+            if prior_species != record.species:
+                raise EDAError("breed maps to inconsistent species")
             species_counts[record.species] += 1
             label_counts[record.label] += 1
+            breed_counts_for_split[record.breed_name] += 1
         species_by_split[split] = {
             name: species_counts[value] for value, name in SPECIES_NAMES.items()
         }
         per_split_labels[split] = label_counts
+        per_split_breeds[split] = breed_counts_for_split
 
     expected_labels = set(range(classes))
     if set(label_names) != expected_labels:
         raise EDAError("registered data does not cover every configured breed")
 
-    breed_counts: list[dict[str, Any]] = []
+    target_counts: list[dict[str, Any]] = []
     for label in range(classes):
         row: dict[str, Any] = {
             "class_id": label,
@@ -107,9 +121,21 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
             **{split: per_split_labels[split][label] for split in PRIMARY_SPLITS},
         }
         row["total"] = sum(per_split_labels[split][label] for split in PRIMARY_SPLITS)
-        breed_counts.append(row)
+        target_counts.append(row)
 
-    breeds_by_species = Counter(SPECIES_NAMES[value] for value in label_species.values())
+    breed_counts: list[dict[str, Any]] = []
+    for index, breed in enumerate(sorted(breed_species)):
+        counts: dict[str, int] = {split: per_split_breeds[split][breed] for split in PRIMARY_SPLITS}
+        breed_counts.append(
+            {
+                "class_id": index,
+                "breed": breed,
+                "species": SPECIES_NAMES[breed_species[breed]],
+                **counts,
+                "total": sum(counts.values()),
+            }
+        )
+    breeds_by_species = Counter(SPECIES_NAMES[value] for value in breed_species.values())
     return {
         "total_unique_images": len(seen_ids),
         "classes": classes,
@@ -117,6 +143,8 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
         "species_by_split": species_by_split,
         "breeds_by_species": {name: breeds_by_species[name] for name in SPECIES_NAMES.values()},
         "breed_counts": breed_counts,
+        "target_counts": target_counts,
+        "label_mode": "species" if species_targets else "breed",
     }
 
 
@@ -267,13 +295,14 @@ def _plot_split_and_species(summary: dict[str, Any], destination: Path) -> None:
 
 
 def _plot_breed_balance(summary: dict[str, Any], destination: Path) -> None:
-    rows = cast(list[dict[str, Any]], summary["breed_counts"])
+    rows = cast(list[dict[str, Any]], summary["target_counts"])
+    species_targets = summary["label_mode"] == "species"
     names = [str(row["breed"]).replace("_", " ") for row in rows]
     training = np.asarray([row["training"] for row in rows], dtype=np.int64)
     calibration = np.asarray([row["calibration"] for row in rows], dtype=np.int64)
     test = np.asarray([row["test"] for row in rows], dtype=np.int64)
     positions = np.arange(len(rows))
-    figure, axis = plt.subplots(figsize=(14, 12), constrained_layout=True)
+    figure, axis = plt.subplots(figsize=(14, 4 if species_targets else 12), constrained_layout=True)
     axis.barh(positions - 0.18, training, height=0.34, color="#2563eb", label="training")
     axis.barh(
         positions - 0.18,
@@ -287,9 +316,11 @@ def _plot_breed_balance(summary: dict[str, Any], destination: Path) -> None:
     axis.set_yticks(positions, names)
     axis.invert_yaxis()
     axis.set(
-        title="Breed balance across the deterministic partitions",
-        xlabel="images per breed",
-        ylabel="breed",
+        title="Cat/dog target balance"
+        if species_targets
+        else "Breed balance across the deterministic partitions",
+        xlabel="images per target class",
+        ylabel="target class",
     )
     axis.grid(axis="x", alpha=0.2)
     axis.legend(ncols=3, loc="lower right")
@@ -410,14 +441,14 @@ def generate_eda(
     figure_root = config.project_path("figures") / "eda"
     destinations = {
         "split_and_species": figure_root / "split-and-species.png",
-        "breed_balance": figure_root / "breed-balance.png",
+        "class_balance": figure_root / "target-balance.png",
         "image_geometry": figure_root / "image-geometry.png",
     }
     relative_figures = {
         name: str(path.relative_to(config.root)) for name, path in destinations.items()
     }
     _plot_split_and_species(record_summary, config.root / relative_figures["split_and_species"])
-    _plot_breed_balance(record_summary, config.root / relative_figures["breed_balance"])
+    _plot_breed_balance(record_summary, config.root / relative_figures["class_balance"])
     _plot_image_geometry(dimensions, config.root / relative_figures["image_geometry"])
     figure_sha256 = {
         relative: sha256_file(config.root / relative) for relative in relative_figures.values()

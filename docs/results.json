@@ -2,105 +2,1200 @@
   "arms": {
     "adversarial": {
       "attack_subset": {
-        "clean_accuracy": 0.7256756756756757,
-        "fgsm_robust_accuracy": 0.3108108108108108,
-        "pgd_attack_success_among_clean_correct": 0.7150837988826816,
-        "pgd_robust_accuracy": 0.20675675675675675
+        "fgsm": {
+          "attack_success_clean_correct": 0.0,
+          "attack_success_count": 0,
+          "clean_accuracy_on_subset": 0.5,
+          "clean_correct_count": 100,
+          "per_class": {
+            "0": {
+              "attack_success_clean_correct": null,
+              "count": 100,
+              "robust_accuracy": 0.0
+            },
+            "1": {
+              "attack_success_clean_correct": 0.0,
+              "count": 100,
+              "robust_accuracy": 1.0
+            }
+          },
+          "robust_accuracy": 0.5
+        },
+        "pgd": {
+          "attack_success_clean_correct": 0.0,
+          "attack_success_count": 0,
+          "clean_accuracy_on_subset": 0.5,
+          "clean_correct_count": 100,
+          "per_class": {
+            "0": {
+              "attack_success_clean_correct": null,
+              "count": 100,
+              "robust_accuracy": 0.0
+            },
+            "1": {
+              "attack_success_clean_correct": 0.0,
+              "count": 100,
+              "robust_accuracy": 1.0
+            }
+          },
+          "robust_accuracy": 0.5
+        }
       },
-      "clean_test": {
-        "accuracy": 0.729081493594985,
-        "aurc": 0.09164395757399697,
-        "brier": 0.36950352209311366,
-        "coverage": 0.9070591441809758,
-        "ece_15": 0.018815673492015444,
-        "macro_accuracy": 0.7283966919237724,
-        "nll": 0.8756187970972433,
-        "selective_risk": 0.22506009615384615
+      "calibration_nll_after": 0.5596016198242255,
+      "calibration_nll_before": 0.564581163942894,
+      "calibration_policy": {
+        "fitted_count": 736,
+        "fitted_coverage": 0.9008152173913043,
+        "target_coverage": 0.9,
+        "temperature": 0.7876799391514757,
+        "threshold": 0.6819244828258902,
+        "threshold_tie_count": 1
       },
-      "representation": {
-        "clean_knn_accuracy": 0.7040540540540541,
-        "clean_nearest_centroid_accuracy": 0.722972972972973,
-        "clean_to_pgd_linear_cka": 0.8626585918713413,
-        "median_cosine_drift": 0.037758347614832044,
-        "median_relative_l2_drift": 0.2832742205771381,
-        "pgd_knn_accuracy": 0.2756756756756757,
-        "pgd_knn_breed_retention": 0.25621621621621626,
-        "pgd_nearest_centroid_accuracy": 0.26756756756756755
+      "clean_prediction_diagnostic": {
+        "available": true,
+        "constant_prediction_baseline_accuracy": 0.6775688198419187,
+        "macro_accuracy": 0.5,
+        "observed_single_class_prediction": true,
+        "per_species_recall": {
+          "cat": 0.0,
+          "dog": 1.0
+        },
+        "prediction_counts": {
+          "cat": 0,
+          "dog": 3669
+        },
+        "sample_count": 3669,
+        "scope": "Observed clean test only; does not imply constant penultimate features or constant predictions for every possible input.",
+        "single_predicted_species_on_clean_test": "dog",
+        "true_counts": {
+          "cat": 1183,
+          "dog": 2486
+        }
+      },
+      "feature_diagnostics": {
+        "anchors": [
+          {
+            "clean_margin": -0.5484750270843506,
+            "label": 0,
+            "pgd_margin": -0.6524302959442139,
+            "pgd_prediction": 1,
+            "prediction": 1,
+            "random_occlusion_mean_drop": 0.004026474431157112,
+            "randomization_cam_correlation": null,
+            "sample_id": "Abyssinian_65",
+            "top_gradcam_occlusion_mean_drop": 0.03317070007324219
+          },
+          {
+            "clean_margin": -0.6334277987480164,
+            "label": 0,
+            "pgd_margin": -0.7222278118133545,
+            "pgd_prediction": 1,
+            "prediction": 1,
+            "random_occlusion_mean_drop": -0.00010575741180218756,
+            "randomization_cam_correlation": null,
+            "sample_id": "Ragdoll_255",
+            "top_gradcam_occlusion_mean_drop": -7.253885269165039e-05
+          },
+          {
+            "clean_margin": 1.305069088935852,
+            "label": 1,
+            "pgd_margin": 0.6837930679321289,
+            "pgd_prediction": 1,
+            "prediction": 1,
+            "random_occlusion_mean_drop": 0.032246220856904984,
+            "randomization_cam_correlation": -0.08337067241064335,
+            "sample_id": "english_cocker_spaniel_56",
+            "top_gradcam_occlusion_mean_drop": 0.01722007989883423
+          },
+          {
+            "clean_margin": 1.3354780673980713,
+            "label": 1,
+            "pgd_margin": 0.9035489559173584,
+            "pgd_prediction": 1,
+            "prediction": 1,
+            "random_occlusion_mean_drop": 0.017761021852493286,
+            "randomization_cam_correlation": -0.16321039137864934,
+            "sample_id": "shiba_inu_67",
+            "top_gradcam_occlusion_mean_drop": 0.001292109489440918
+          }
+        ],
+        "layers": {
+          "network.layer2": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 0.1405574232339859,
+                  "calibration_mean_response_dog": 0.12801721692085266,
+                  "channel": 62,
+                  "final_unregularized_mean_response": 5.877261638641357,
+                  "initial_unregularized_mean_response": 0.0020214286632835865,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270979,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 5.875240209978074
+                },
+                {
+                  "calibration_mean_response_cat": 0.08480677753686905,
+                  "calibration_mean_response_dog": 0.09276136010885239,
+                  "channel": 71,
+                  "final_unregularized_mean_response": 4.527751445770264,
+                  "initial_unregularized_mean_response": 0.006589469034224749,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270988,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.521161976736039
+                },
+                {
+                  "calibration_mean_response_cat": 0.10880857706069946,
+                  "calibration_mean_response_dog": 0.11154579371213913,
+                  "channel": 73,
+                  "final_unregularized_mean_response": 0.0,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270990,
+                  "single_start_status": "unsuccessful_zero_response_single_start",
+                  "unregularized_response_gain": 0.0
+                },
+                {
+                  "calibration_mean_response_cat": 0.06435474753379822,
+                  "calibration_mean_response_dog": 0.06889843195676804,
+                  "channel": 91,
+                  "final_unregularized_mean_response": 4.594786167144775,
+                  "initial_unregularized_mean_response": 7.397529407171533e-05,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20271008,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.594712191850704
+                },
+                {
+                  "calibration_mean_response_cat": 0.13806591928005219,
+                  "calibration_mean_response_dog": 0.134247288107872,
+                  "channel": 23,
+                  "final_unregularized_mean_response": 4.998371601104736,
+                  "initial_unregularized_mean_response": 0.0024590585380792618,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270940,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.995912542566657
+                },
+                {
+                  "calibration_mean_response_cat": 0.0890645831823349,
+                  "calibration_mean_response_dog": 0.09479309618473053,
+                  "channel": 124,
+                  "final_unregularized_mean_response": 5.242497444152832,
+                  "initial_unregularized_mean_response": 0.0019008666276931763,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20271041,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 5.240596577525139
+                }
+              ],
+              "zero_response_single_start_count": 1
+            },
+            "calibration_mean_response_cat": 0.10427633797128995,
+            "calibration_mean_response_dog": 0.1050438644985358,
+            "mean_relative_response_change_from_initial": -0.0794965320577224,
+            "receptive_field_pixels": 99,
+            "selected_channel_count": 6,
+            "selected_channels": "62, 71, 73, 91, 23, 124",
+            "spatial_grid": "28\u00d728"
+          },
+          "network.layer4": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 0.8541882634162903,
+                  "calibration_mean_response_dog": 0.9773045778274536,
+                  "channel": 491,
+                  "final_unregularized_mean_response": 0.0,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281408,
+                  "single_start_status": "unsuccessful_zero_response_single_start",
+                  "unregularized_response_gain": 0.0
+                },
+                {
+                  "calibration_mean_response_cat": 0.4554535150527954,
+                  "calibration_mean_response_dog": 1.4753098487854004,
+                  "channel": 418,
+                  "final_unregularized_mean_response": 0.0,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281335,
+                  "single_start_status": "unsuccessful_zero_response_single_start",
+                  "unregularized_response_gain": 0.0
+                },
+                {
+                  "calibration_mean_response_cat": 0.35706499218940735,
+                  "calibration_mean_response_dog": 0.9133003354072571,
+                  "channel": 133,
+                  "final_unregularized_mean_response": 48.98493957519531,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281050,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 48.98493957519531
+                },
+                {
+                  "calibration_mean_response_cat": 0.6931045055389404,
+                  "calibration_mean_response_dog": 0.7387793660163879,
+                  "channel": 199,
+                  "final_unregularized_mean_response": 80.14339447021484,
+                  "initial_unregularized_mean_response": 0.005045785568654537,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281116,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 80.13834868464619
+                },
+                {
+                  "calibration_mean_response_cat": 0.5427777767181396,
+                  "calibration_mean_response_dog": 1.3037550449371338,
+                  "channel": 47,
+                  "final_unregularized_mean_response": 44.78328323364258,
+                  "initial_unregularized_mean_response": 0.04645387455821037,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20280964,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 44.73682935908437
+                },
+                {
+                  "calibration_mean_response_cat": 0.45007792115211487,
+                  "calibration_mean_response_dog": 1.2566561698913574,
+                  "channel": 61,
+                  "final_unregularized_mean_response": 0.0,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20280978,
+                  "single_start_status": "unsuccessful_zero_response_single_start",
+                  "unregularized_response_gain": 0.0
+                }
+              ],
+              "zero_response_single_start_count": 3
+            },
+            "calibration_mean_response_cat": 0.5587778290112814,
+            "calibration_mean_response_dog": 1.1108508904774983,
+            "mean_relative_response_change_from_initial": -0.2561616276701291,
+            "receptive_field_pixels": 435,
+            "selected_channel_count": 6,
+            "selected_channels": "491, 418, 133, 199, 47, 61",
+            "spatial_grid": "7\u00d77"
+          },
+          "network.relu": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 0.2741529643535614,
+                  "calibration_mean_response_dog": 0.273563027381897,
+                  "channel": 49,
+                  "final_unregularized_mean_response": 2.6365368366241455,
+                  "initial_unregularized_mean_response": 0.28053680062294006,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260966,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.3560000360012054
+                },
+                {
+                  "calibration_mean_response_cat": 0.26827386021614075,
+                  "calibration_mean_response_dog": 0.26201361417770386,
+                  "channel": 63,
+                  "final_unregularized_mean_response": 2.3070881366729736,
+                  "initial_unregularized_mean_response": 0.2777387201786041,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260980,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.0293494164943695
+                },
+                {
+                  "calibration_mean_response_cat": 0.30323320627212524,
+                  "calibration_mean_response_dog": 0.31231820583343506,
+                  "channel": 20,
+                  "final_unregularized_mean_response": 1.6039087772369385,
+                  "initial_unregularized_mean_response": 0.28851333260536194,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260937,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 1.3153954446315765
+                },
+                {
+                  "calibration_mean_response_cat": 0.5973261594772339,
+                  "calibration_mean_response_dog": 0.6101234555244446,
+                  "channel": 51,
+                  "final_unregularized_mean_response": 1.075939416885376,
+                  "initial_unregularized_mean_response": 0.5631551742553711,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260968,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 0.5127842426300049
+                },
+                {
+                  "calibration_mean_response_cat": 0.3943444490432739,
+                  "calibration_mean_response_dog": 0.3814105987548828,
+                  "channel": 10,
+                  "final_unregularized_mean_response": 0.9872311353683472,
+                  "initial_unregularized_mean_response": 0.4059230387210846,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260927,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 0.5813080966472626
+                },
+                {
+                  "calibration_mean_response_cat": 0.5498915910720825,
+                  "calibration_mean_response_dog": 0.5611191987991333,
+                  "channel": 60,
+                  "final_unregularized_mean_response": 2.0528199672698975,
+                  "initial_unregularized_mean_response": 0.5104856491088867,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260977,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 1.5423343181610107
+                }
+              ],
+              "zero_response_single_start_count": 0
+            },
+            "calibration_mean_response_cat": 0.39787037173906964,
+            "calibration_mean_response_dog": 0.40009135007858276,
+            "mean_relative_response_change_from_initial": 0.020927081039796274,
+            "receptive_field_pixels": 7,
+            "selected_channel_count": 6,
+            "selected_channels": "49, 63, 20, 51, 10, 60",
+            "spatial_grid": "112\u00d7112"
+          }
+        },
+        "state_unchanged": true
+      },
+      "full_test": {
+        "brightness-0.6": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.09419685294504816,
+            "brier": 0.42367783787651714,
+            "coverage": 0.9771054783319706,
+            "ece_15": 0.06544888012021267,
+            "nll": 0.6119365887146831,
+            "selective_risk": 0.30655509065550907
+          }
+        },
+        "brightness-0.8": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.07689456064112213,
+            "brier": 0.400908912535702,
+            "coverage": 0.9337694194603434,
+            "ece_15": 0.14682659028806783,
+            "nll": 0.5811907912185315,
+            "selective_risk": 0.27437244600116756
+          }
+        },
+        "clean": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.07468324436438452,
+            "brier": 0.3800514969766723,
+            "coverage": 0.9032433905696375,
+            "ece_15": 0.20523359726442408,
+            "nll": 0.5505143357776081,
+            "selective_risk": 0.24984912492456246
+          }
+        },
+        "contrast-0.5": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.14858577955371996,
+            "brier": 0.43520185397523,
+            "coverage": 0.9972744617061869,
+            "ece_15": 0.01789381074915711,
+            "nll": 0.626587848601279,
+            "selective_risk": 0.3205793932768516
+          }
+        },
+        "contrast-0.75": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.08372153320426154,
+            "brier": 0.412944703466843,
+            "coverage": 0.9607522485690924,
+            "ece_15": 0.10845001338941536,
+            "nll": 0.5977556761763743,
+            "selective_risk": 0.2947517730496454
+          }
+        },
+        "gaussian_blur-0.75": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.08570684800699904,
+            "brier": 0.3928077136776143,
+            "coverage": 0.9582992641046607,
+            "ece_15": 0.17920905286215238,
+            "nll": 0.5680107916073992,
+            "selective_risk": 0.29294653014789535
+          }
+        },
+        "gaussian_blur-1.5": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.10681281136723716,
+            "brier": 0.41069308771035884,
+            "coverage": 0.9989097846824748,
+            "ece_15": 0.12566654687342618,
+            "nll": 0.5932873031571563,
+            "selective_risk": 0.32169167803547066
+          }
+        },
+        "gaussian_noise-0.02": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.07544090691663494,
+            "brier": 0.3803732209099512,
+            "coverage": 0.9073316980103571,
+            "ece_15": 0.20584197576123633,
+            "nll": 0.5508416710611833,
+            "selective_risk": 0.25322919795734455
+          }
+        },
+        "gaussian_noise-0.05": {
+          "accuracy": 0.6775688198419187,
+          "macro_accuracy": 0.5,
+          "per_class_accuracy": {
+            "0": 0.0,
+            "1": 1.0
+          },
+          "risk": {
+            "aurc": 0.07853535879876775,
+            "brier": 0.38272345420976545,
+            "coverage": 0.9250476969201418,
+            "ece_15": 0.20428959771436014,
+            "nll": 0.55381271734817,
+            "selective_risk": 0.26753093694755453
+          }
+        }
       },
       "training": {
-        "elapsed_seconds": 1599.6335382920006,
+        "elapsed_seconds": 1712.8677202089966,
         "epochs": 15,
         "optimizer_updates": 1380
       }
     },
     "standard": {
       "attack_subset": {
-        "clean_accuracy": 0.8797297297297297,
-        "fgsm_robust_accuracy": 0.02837837837837838,
-        "pgd_attack_success_among_clean_correct": 1.0,
-        "pgd_robust_accuracy": 0.0
+        "fgsm": {
+          "attack_success_clean_correct": 0.8241206030150754,
+          "attack_success_count": 164,
+          "clean_accuracy_on_subset": 0.995,
+          "clean_correct_count": 199,
+          "per_class": {
+            "0": {
+              "attack_success_clean_correct": 0.67,
+              "count": 100,
+              "robust_accuracy": 0.33
+            },
+            "1": {
+              "attack_success_clean_correct": 0.9797979797979798,
+              "count": 100,
+              "robust_accuracy": 0.02
+            }
+          },
+          "robust_accuracy": 0.175
+        },
+        "pgd": {
+          "attack_success_clean_correct": 1.0,
+          "attack_success_count": 199,
+          "clean_accuracy_on_subset": 0.995,
+          "clean_correct_count": 199,
+          "per_class": {
+            "0": {
+              "attack_success_clean_correct": 1.0,
+              "count": 100,
+              "robust_accuracy": 0.0
+            },
+            "1": {
+              "attack_success_clean_correct": 1.0,
+              "count": 100,
+              "robust_accuracy": 0.0
+            }
+          },
+          "robust_accuracy": 0.0
+        }
       },
-      "clean_test": {
-        "accuracy": 0.8915235759062414,
-        "aurc": 0.021307014659939606,
-        "brier": 0.16066344573573027,
-        "coverage": 0.8923412373943854,
-        "ece_15": 0.022437972412339902,
-        "macro_accuracy": 0.8912780307907806,
-        "nll": 0.36502976925163,
-        "selective_risk": 0.06108735491753207
+      "calibration_nll_after": 0.012229323766123956,
+      "calibration_nll_before": 0.01243351788109754,
+      "calibration_policy": {
+        "fitted_count": 736,
+        "fitted_coverage": 0.9008152173913043,
+        "target_coverage": 0.9,
+        "temperature": 0.8691130010140731,
+        "threshold": 0.999282774758492,
+        "threshold_tie_count": 1
       },
-      "representation": {
-        "clean_knn_accuracy": 0.8864864864864865,
-        "clean_nearest_centroid_accuracy": 0.8891891891891892,
-        "clean_to_pgd_linear_cka": 0.16687396154589065,
-        "median_cosine_drift": 0.45314273065018645,
-        "median_relative_l2_drift": 2.8831984386285807,
-        "pgd_knn_accuracy": 0.0,
-        "pgd_knn_breed_retention": 0.001081081081081081,
-        "pgd_nearest_centroid_accuracy": 0.0
+      "clean_prediction_diagnostic": {
+        "available": true,
+        "constant_prediction_baseline_accuracy": null,
+        "macro_accuracy": 0.9931588153167459,
+        "observed_single_class_prediction": false,
+        "per_species_recall": {
+          "cat": 0.9915469146238377,
+          "dog": 0.994770716009654
+        },
+        "prediction_counts": {
+          "cat": 1186,
+          "dog": 2483
+        },
+        "sample_count": 3669,
+        "scope": "Observed clean test only; does not imply constant penultimate features or constant predictions for every possible input.",
+        "single_predicted_species_on_clean_test": null,
+        "true_counts": {
+          "cat": 1183,
+          "dog": 2486
+        }
+      },
+      "feature_diagnostics": {
+        "anchors": [
+          {
+            "clean_margin": 6.461518287658691,
+            "label": 0,
+            "pgd_margin": -97.7516860961914,
+            "pgd_prediction": 1,
+            "prediction": 0,
+            "random_occlusion_mean_drop": 0.07680585980415344,
+            "randomization_cam_correlation": null,
+            "sample_id": "Abyssinian_65",
+            "top_gradcam_occlusion_mean_drop": 1.7496947050094604
+          },
+          {
+            "clean_margin": 8.643449783325195,
+            "label": 0,
+            "pgd_margin": -122.79225158691406,
+            "pgd_prediction": 1,
+            "prediction": 0,
+            "random_occlusion_mean_drop": 0.48289555311203003,
+            "randomization_cam_correlation": -0.20640070936567517,
+            "sample_id": "Ragdoll_255",
+            "top_gradcam_occlusion_mean_drop": 1.6258206367492676
+          },
+          {
+            "clean_margin": 24.93172836303711,
+            "label": 1,
+            "pgd_margin": -44.062740325927734,
+            "pgd_prediction": 0,
+            "prediction": 1,
+            "random_occlusion_mean_drop": 0.5396355986595154,
+            "randomization_cam_correlation": -0.18071183709127078,
+            "sample_id": "english_cocker_spaniel_56",
+            "top_gradcam_occlusion_mean_drop": 2.446542263031006
+          },
+          {
+            "clean_margin": 12.998637199401855,
+            "label": 1,
+            "pgd_margin": -44.51259994506836,
+            "pgd_prediction": 0,
+            "prediction": 1,
+            "random_occlusion_mean_drop": 0.17186865210533142,
+            "randomization_cam_correlation": -0.09676368550249577,
+            "sample_id": "shiba_inu_67",
+            "top_gradcam_occlusion_mean_drop": 1.710606336593628
+          }
+        ],
+        "layers": {
+          "network.layer2": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 0.18753081560134888,
+                  "calibration_mean_response_dog": 0.17383280396461487,
+                  "channel": 115,
+                  "final_unregularized_mean_response": 2.8939239978790283,
+                  "initial_unregularized_mean_response": 0.17169025540351868,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20271032,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.7222337424755096
+                },
+                {
+                  "calibration_mean_response_cat": 0.0848998874425888,
+                  "calibration_mean_response_dog": 0.09488078951835632,
+                  "channel": 91,
+                  "final_unregularized_mean_response": 4.514297962188721,
+                  "initial_unregularized_mean_response": 0.021043898537755013,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20271008,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.493254063650966
+                },
+                {
+                  "calibration_mean_response_cat": 0.16482067108154297,
+                  "calibration_mean_response_dog": 0.15447773039340973,
+                  "channel": 23,
+                  "final_unregularized_mean_response": 3.407874822616577,
+                  "initial_unregularized_mean_response": 0.06997818499803543,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270940,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 3.3378966376185417
+                },
+                {
+                  "calibration_mean_response_cat": 0.13590407371520996,
+                  "calibration_mean_response_dog": 0.1268739253282547,
+                  "channel": 62,
+                  "final_unregularized_mean_response": 4.099506378173828,
+                  "initial_unregularized_mean_response": 0.019641194492578506,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270979,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.07986518368125
+                },
+                {
+                  "calibration_mean_response_cat": 0.12310478091239929,
+                  "calibration_mean_response_dog": 0.12355071306228638,
+                  "channel": 69,
+                  "final_unregularized_mean_response": 4.247732162475586,
+                  "initial_unregularized_mean_response": 0.013328082859516144,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270986,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.23440407961607
+                },
+                {
+                  "calibration_mean_response_cat": 0.08966538310050964,
+                  "calibration_mean_response_dog": 0.09600569307804108,
+                  "channel": 71,
+                  "final_unregularized_mean_response": 3.0883121490478516,
+                  "initial_unregularized_mean_response": 0.040725380182266235,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20270988,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 3.0475867688655853
+                }
+              ],
+              "zero_response_single_start_count": 0
+            },
+            "calibration_mean_response_cat": 0.13098760197559992,
+            "calibration_mean_response_dog": 0.12827027589082718,
+            "mean_relative_response_change_from_initial": 0.02879184507764876,
+            "receptive_field_pixels": 99,
+            "selected_channel_count": 6,
+            "selected_channels": "115, 91, 23, 62, 69, 71",
+            "spatial_grid": "28\u00d728"
+          },
+          "network.layer4": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 1.669419527053833,
+                  "calibration_mean_response_dog": 0.4658975303173065,
+                  "channel": 417,
+                  "final_unregularized_mean_response": 28.850236892700195,
+                  "initial_unregularized_mean_response": 0.14960041642189026,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281334,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 28.700636476278305
+                },
+                {
+                  "calibration_mean_response_cat": 2.0060150623321533,
+                  "calibration_mean_response_dog": 0.5232187509536743,
+                  "channel": 245,
+                  "final_unregularized_mean_response": 27.110755920410156,
+                  "initial_unregularized_mean_response": 0.08863522857427597,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281162,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 27.02212069183588
+                },
+                {
+                  "calibration_mean_response_cat": 0.6062518358230591,
+                  "calibration_mean_response_dog": 1.8735382556915283,
+                  "channel": 17,
+                  "final_unregularized_mean_response": 30.986251831054688,
+                  "initial_unregularized_mean_response": 0.0,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20280934,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 30.986251831054688
+                },
+                {
+                  "calibration_mean_response_cat": 1.799286127090454,
+                  "calibration_mean_response_dog": 0.2079848051071167,
+                  "channel": 345,
+                  "final_unregularized_mean_response": 19.85308837890625,
+                  "initial_unregularized_mean_response": 0.06503862142562866,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281262,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 19.78804975748062
+                },
+                {
+                  "calibration_mean_response_cat": 1.580845832824707,
+                  "calibration_mean_response_dog": 0.67473304271698,
+                  "channel": 186,
+                  "final_unregularized_mean_response": 43.326690673828125,
+                  "initial_unregularized_mean_response": 0.20570902526378632,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20281103,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 43.12098164856434
+                },
+                {
+                  "calibration_mean_response_cat": 1.6109769344329834,
+                  "calibration_mean_response_dog": 0.8563880324363708,
+                  "channel": 46,
+                  "final_unregularized_mean_response": 57.874969482421875,
+                  "initial_unregularized_mean_response": 0.43283867835998535,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20280963,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 57.44213080406189
+                }
+              ],
+              "zero_response_single_start_count": 0
+            },
+            "calibration_mean_response_cat": 1.545465886592865,
+            "calibration_mean_response_dog": 0.7669600695371628,
+            "mean_relative_response_change_from_initial": 0.32937079668045044,
+            "receptive_field_pixels": 435,
+            "selected_channel_count": 6,
+            "selected_channels": "417, 245, 17, 345, 186, 46",
+            "spatial_grid": "7\u00d77"
+          },
+          "network.relu": {
+            "activation_maximization": {
+              "available": true,
+              "interpretation": "Single recorded optimization start, not a dead-channel test. Initial/final raw responses are distinct from the regularized jittered loss.",
+              "responses": [
+                {
+                  "calibration_mean_response_cat": 0.21773236989974976,
+                  "calibration_mean_response_dog": 0.22694900631904602,
+                  "channel": 24,
+                  "final_unregularized_mean_response": 5.045945167541504,
+                  "initial_unregularized_mean_response": 0.3526690602302551,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260941,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 4.693276107311249
+                },
+                {
+                  "calibration_mean_response_cat": 0.25803112983703613,
+                  "calibration_mean_response_dog": 0.263420969247818,
+                  "channel": 49,
+                  "final_unregularized_mean_response": 2.5524253845214844,
+                  "initial_unregularized_mean_response": 0.24781417846679688,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260966,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.3046112060546875
+                },
+                {
+                  "calibration_mean_response_cat": 0.24728965759277344,
+                  "calibration_mean_response_dog": 0.2532404363155365,
+                  "channel": 39,
+                  "final_unregularized_mean_response": 5.602756977081299,
+                  "initial_unregularized_mean_response": 0.3410261571407318,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260956,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 5.261730819940567
+                },
+                {
+                  "calibration_mean_response_cat": 0.24557644128799438,
+                  "calibration_mean_response_dog": 0.2505187392234802,
+                  "channel": 63,
+                  "final_unregularized_mean_response": 2.3333966732025146,
+                  "initial_unregularized_mean_response": 0.23294775187969208,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260980,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.1004489213228226
+                },
+                {
+                  "calibration_mean_response_cat": 0.3890702724456787,
+                  "calibration_mean_response_dog": 0.37930065393447876,
+                  "channel": 10,
+                  "final_unregularized_mean_response": 1.6638034582138062,
+                  "initial_unregularized_mean_response": 0.39718741178512573,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260927,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 1.2666160464286804
+                },
+                {
+                  "calibration_mean_response_cat": 0.22497589886188507,
+                  "calibration_mean_response_dog": 0.23578904569149017,
+                  "channel": 59,
+                  "final_unregularized_mean_response": 3.2144410610198975,
+                  "initial_unregularized_mean_response": 0.2569429576396942,
+                  "objective": "spatial mean channel activation minus TV and pixel-L2 penalties",
+                  "response_measurement": "Unjittered initial/final bounded input; raw channel spatial mean. This is not the regularized, jittered optimization loss.",
+                  "seed": 20260976,
+                  "single_start_status": "measured_response_increased",
+                  "unregularized_response_gain": 2.9574981033802032
+                }
+              ],
+              "zero_response_single_start_count": 0
+            },
+            "calibration_mean_response_cat": 0.26377929498751956,
+            "calibration_mean_response_dog": 0.26820314178864163,
+            "mean_relative_response_change_from_initial": 0.02486381501269837,
+            "receptive_field_pixels": 7,
+            "selected_channel_count": 6,
+            "selected_channels": "24, 49, 39, 63, 10, 59",
+            "spatial_grid": "112\u00d7112"
+          }
+        },
+        "state_unchanged": true
+      },
+      "full_test": {
+        "brightness-0.6": {
+          "accuracy": 0.9920959389479422,
+          "macro_accuracy": 0.9904013617424101,
+          "per_class_accuracy": {
+            "0": 0.9856297548605241,
+            "1": 0.995172968624296
+          },
+          "risk": {
+            "aurc": 0.00015682931753887214,
+            "brier": 0.012478816287018562,
+            "coverage": 0.8765331152902698,
+            "ece_15": 0.002865180378598315,
+            "nll": 0.022738052446879323,
+            "selective_risk": 0.0
+          }
+        },
+        "brightness-0.8": {
+          "accuracy": 0.99373126192423,
+          "macro_accuracy": 0.9929372873552588,
+          "per_class_accuracy": {
+            "0": 0.9907016060862215,
+            "1": 0.995172968624296
+          },
+          "risk": {
+            "aurc": 0.00013044739618545402,
+            "brier": 0.010548517975441695,
+            "coverage": 0.8967020986644862,
+            "ece_15": 0.003490345994549675,
+            "nll": 0.02024603376646115,
+            "selective_risk": 0.0
+          }
+        },
+        "clean": {
+          "accuracy": 0.99373126192423,
+          "macro_accuracy": 0.9931588153167459,
+          "per_class_accuracy": {
+            "0": 0.9915469146238377,
+            "1": 0.994770716009654
+          },
+          "risk": {
+            "aurc": 0.00011542130220516197,
+            "brier": 0.009943423837149225,
+            "coverage": 0.9005178522758245,
+            "ece_15": 0.0036198678935227347,
+            "nll": 0.019067979876113583,
+            "selective_risk": 0.0
+          }
+        },
+        "contrast-0.5": {
+          "accuracy": 0.9871899700190788,
+          "macro_accuracy": 0.9878887280180677,
+          "per_class_accuracy": {
+            "0": 0.9898562975486053,
+            "1": 0.9859211584875301
+          },
+          "risk": {
+            "aurc": 0.0004005496856759691,
+            "brier": 0.020373279001135045,
+            "coverage": 0.8356500408830744,
+            "ece_15": 0.0051054870101536025,
+            "nll": 0.037000740241851904,
+            "selective_risk": 0.0
+          }
+        },
+        "contrast-0.75": {
+          "accuracy": 0.9923684927773235,
+          "macro_accuracy": 0.992153183780141,
+          "per_class_accuracy": {
+            "0": 0.9915469146238377,
+            "1": 0.9927594529364441
+          },
+          "risk": {
+            "aurc": 0.0001615631455213855,
+            "brier": 0.011493692583325079,
+            "coverage": 0.890160806759335,
+            "ece_15": 0.0029168599853823286,
+            "nll": 0.022382055143847352,
+            "selective_risk": 0.0
+          }
+        },
+        "gaussian_blur-0.75": {
+          "accuracy": 0.9901880621422731,
+          "macro_accuracy": 0.988771949629676,
+          "per_class_accuracy": {
+            "0": 0.9847844463229078,
+            "1": 0.9927594529364441
+          },
+          "risk": {
+            "aurc": 0.0002407470787502516,
+            "brier": 0.01535729703806522,
+            "coverage": 0.8729899155083128,
+            "ece_15": 0.004939951443443866,
+            "nll": 0.028763242862224245,
+            "selective_risk": 0.0
+          }
+        },
+        "gaussian_blur-1.5": {
+          "accuracy": 0.9735622785500136,
+          "macro_accuracy": 0.9640976790398166,
+          "per_class_accuracy": {
+            "0": 0.937447168216399,
+            "1": 0.9907481898632341
+          },
+          "risk": {
+            "aurc": 0.0015400515304527537,
+            "brier": 0.04158556476325336,
+            "coverage": 0.7683292450258926,
+            "ece_15": 0.011355401620443059,
+            "nll": 0.07616121130002061,
+            "selective_risk": 0.000354735721887194
+          }
+        },
+        "gaussian_noise-0.02": {
+          "accuracy": 0.9926410466067048,
+          "macro_accuracy": 0.9927973660104361,
+          "per_class_accuracy": {
+            "0": 0.9932375316990701,
+            "1": 0.9923572003218021
+          },
+          "risk": {
+            "aurc": 0.00012087388723392925,
+            "brier": 0.010592722883655753,
+            "coverage": 0.8958844371763424,
+            "ece_15": 0.0036145915130357305,
+            "nll": 0.019955517657708675,
+            "selective_risk": 0.0
+          }
+        },
+        "gaussian_noise-0.05": {
+          "accuracy": 0.9874625238484601,
+          "macro_accuracy": 0.986760686556466,
+          "per_class_accuracy": {
+            "0": 0.9847844463229078,
+            "1": 0.9887369267900241
+          },
+          "risk": {
+            "aurc": 0.0004123704906130313,
+            "brier": 0.01921097756462926,
+            "coverage": 0.8304715181248297,
+            "ece_15": 0.00481070379868203,
+            "nll": 0.03597702298405997,
+            "selective_risk": 0.0
+          }
+        }
       },
       "training": {
-        "elapsed_seconds": 481.7885293750005,
+        "elapsed_seconds": 500.4828850840022,
         "epochs": 15,
         "optimizer_updates": 1380
       }
     }
   },
-  "difficult_pair": {
-    "first_class": 5,
-    "first_name": "Bengal",
-    "mean_cosine_centroid_distance": 0.11002739499069292,
-    "second_class": 11,
-    "second_name": "Egyptian_Mau",
-    "symmetric_confusion_count_across_models": 10,
-    "tie_breakers": "minimum centroid distance, then ascending class IDs"
-  },
-  "limitations": [
-    "One ImageNet-initialized ResNet-18 pair and one split/seed family were evaluated.",
-    "Bootstrap intervals quantify paired test-sample uncertainty, not retraining variability.",
-    "PGD-20 with five restarts is finite digital attack search, not certified robustness.",
-    "PCA, t-SNE, and UMAP distort different relationships and are explanatory only.",
-    "Synthetic corruptions and bounded pixel attacks do not establish physical or safe use."
+  "figures": [
+    {
+      "arm": "experiment",
+      "caption": "Measured-layer architecture and distinct probe questions: synthetic channel preferences, spatial responses/local sensitivity, and class attribution. Intermediate layer1/layer3 are included in the forward path, although not selected for image grids.",
+      "kind": "species_response",
+      "path": "docs/assets/experiment-species_response-experiment-workflow.png"
+    },
+    {
+      "arm": "experiment",
+      "caption": "Saved classification evidence: clean official-test accuracy is separate from matched-subset clean/FGSM/PGD accuracy. Finite attacks do not certify robustness, and these values do not validate a named feature. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "species_response",
+      "path": "docs/assets/experiment-species_response-experiment-accuracy-context.png"
+    },
+    {
+      "arm": "experiment",
+      "caption": "Per-epoch saved objectives shown separately: standard CE uses clean augmented inputs; adversarial CE uses PGD training inputs. Lower loss across arms is not a matched-objective quality comparison.",
+      "kind": "species_response",
+      "path": "docs/assets/experiment-species_response-experiment-training-objectives.png"
+    },
+    {
+      "arm": "dataset",
+      "caption": "Dataset EDA: class balance.",
+      "kind": "species_response",
+      "path": "docs/assets/dataset-species_response-target-balance.png"
+    },
+    {
+      "arm": "dataset",
+      "caption": "Dataset EDA: image geometry.",
+      "kind": "species_response",
+      "path": "docs/assets/dataset-species_response-image-geometry.png"
+    },
+    {
+      "arm": "dataset",
+      "caption": "Dataset EDA: split and species.",
+      "kind": "species_response",
+      "path": "docs/assets/dataset-species_response-split-and-species.png"
+    },
+    {
+      "arm": "standard",
+      "caption": "Layer-wise optimized channel preferences. Every tile is independently optimized from private seeded noise; visual appearance is not evidence of a named detector.",
+      "kind": "activation_maximization",
+      "path": "docs/assets/standard-activation_maximization-standard-synthetic-atlas.png"
+    },
+    {
+      "arm": "standard",
+      "caption": "Raw channel response means on balanced calibration samples; activation scales differ by layer/arm, and brightness in overlays is not an arm comparison.",
+      "kind": "species_response",
+      "path": "docs/assets/standard-species_response-standard-species-response.png"
+    },
+    {
+      "arm": "standard",
+      "caption": "Relative change on identical calibration images from ImageNet initialization. This demonstrates change, not that all visible patterns were newly learned here.",
+      "kind": "initial_response_change",
+      "path": "docs/assets/standard-initial_response_change-standard-initial-response-change.png"
+    },
+    {
+      "arm": "standard",
+      "caption": "Actual first-layer weights, initialized weights, and their differences. Deeper channel filters have many input channels and are instead probed with optimization and real examples.",
+      "kind": "kernels",
+      "path": "docs/assets/standard-kernels-standard-kernels.png"
+    },
+    {
+      "arm": "standard",
+      "caption": "Average single-tile occlusion effect for Grad-CAM-ranked versus random equal-area tiles. Not an additive whole-mask effect; four anchors do not support a population claim.",
+      "kind": "localization_summary",
+      "path": "docs/assets/standard-localization_summary-standard-localization-summary.png"
+    },
+    {
+      "arm": "adversarial",
+      "caption": "Layer-wise optimized channel preferences. Every tile is independently optimized from private seeded noise; visual appearance is not evidence of a named detector. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "activation_maximization",
+      "path": "docs/assets/adversarial-activation_maximization-adversarial-synthetic-atlas.png"
+    },
+    {
+      "arm": "adversarial",
+      "caption": "Raw channel response means on balanced calibration samples; activation scales differ by layer/arm, and brightness in overlays is not an arm comparison. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "species_response",
+      "path": "docs/assets/adversarial-species_response-adversarial-species-response.png"
+    },
+    {
+      "arm": "adversarial",
+      "caption": "Relative change on identical calibration images from ImageNet initialization. This demonstrates change, not that all visible patterns were newly learned here. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "initial_response_change",
+      "path": "docs/assets/adversarial-initial_response_change-adversarial-initial-response-change.png"
+    },
+    {
+      "arm": "adversarial",
+      "caption": "Actual first-layer weights, initialized weights, and their differences. Deeper channel filters have many input channels and are instead probed with optimization and real examples. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "kernels",
+      "path": "docs/assets/adversarial-kernels-adversarial-kernels.png"
+    },
+    {
+      "arm": "adversarial",
+      "caption": "Average single-tile occlusion effect for Grad-CAM-ranked versus random equal-area tiles. Not an additive whole-mask effect; four anchors do not support a population claim. WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.",
+      "kind": "localization_summary",
+      "path": "docs/assets/adversarial-localization_summary-adversarial-localization-summary.png"
+    }
   ],
-  "observed_at": "2026-09-14T19:52:32+05:30",
-  "primary_hypothesis": {
-    "decision_rule": "drift upper < 0 and retention lower > 0",
-    "drift_ci95": [
-      -0.42340289667058684,
-      -0.4089427028658589
-    ],
-    "drift_difference_adversarial_minus_standard": -0.4153843830353544,
-    "primary_supported": true,
-    "replicates": 2000,
-    "retention_ci95": [
-      0.23539864864864862,
-      0.2762162162162162
-    ],
-    "retention_difference_adversarial_minus_standard": 0.2551351351351352,
-    "seed": 20260919
-  },
-  "project": "Adversarial Representation Drift in Fine-Grained Pet Recognition",
+  "limitations": [
+    "One ImageNet-initialized ResNet-18 pair and one split/seed family limit scope.",
+    "Synthetic channel stimuli are optimized inputs, not recovered training images.",
+    "Channel responses do not prove named concepts or identify their causal training source.",
+    "Receptive-field boxes describe theoretical support, not exact contributing pixels.",
+    "Grad-CAM, occlusion, and randomization are descriptive localization diagnostics.",
+    "Finite digital attacks and synthetic corruptions do not establish physical or safe use.",
+    "Responses do not identify which training photograph caused a filter to be learned.",
+    "Synthetic patterns are regularized optimized stimuli, not reconstructed pet photographs.",
+    "ImageNet pretraining already supplies feature detectors; changes from initialization are reported.",
+    "No channel is claimed to be a verified eye, ear, fur, or other named semantic detector.",
+    "Grad-CAM is coarse class attribution; channel sensitivity is a local input gradient.",
+    "Theoretical high-layer receptive fields exceed the crop; an activation cell is not a tiny isolated part.",
+    "Occlusion introduces an artificial shift; four fixed anchors support descriptive, not population, conclusions.",
+    "Channels are ranked independently within each arm; equal channel IDs do not guarantee equal semantics.",
+    "Only one initialization and finite digital attack family are evaluated; no physical or safety claim is made."
+  ],
+  "observed_at": "2026-09-17T17:45:29+05:30",
+  "project": "Cat and Dog CNN Feature Learning and Localization",
   "protocol": {
     "architecture": "resnet18",
     "attack": {
@@ -111,145 +1206,104 @@
       "targeted": false,
       "training_steps": 5
     },
-    "attack_subset_count": 740,
-    "classes": 37,
+    "attack_subset_count": 200,
+    "classes": 2,
     "dataset": "Oxford-IIIT Pet",
     "dataset_license": "CC BY-SA 4.0 dataset; original image copyrights retained",
     "dataset_source": "Oxford-IIIT Pet official images and annotations via Torchvision",
     "device": "mps",
     "dtype": "float32",
     "epochs": 15,
+    "fixed_subset_stratification": "target_class",
+    "label_mode": "species",
     "pretrained_weights": "IMAGENET1K_V1",
     "split": {
       "calibration": 736,
       "official_test": 3669,
       "training": 2944
-    }
+    },
+    "target_names": {
+      "0": "cat",
+      "1": "dog"
+    },
+    "train_calibration_stratification": "breed"
   },
   "provenance": {
     "checkpoints": {
       "adversarial": {
-        "sha256": "bc26317747ab02b5a8bee257d29c9ba7f6808f379af2876221eafaf5e4dd76c6"
+        "sha256": "b728ff31e384a9c02bf0cd685abadf2435a7f549945b687023dae19c7c9239cb"
       },
       "standard": {
-        "sha256": "9e652348f5624baf68c0698693edbcb4d73030316bc7f1102da25745a33559d8"
+        "sha256": "d12126baffbc2c46b2d2555aa546e8beae5b7c18082537afcc1d139840817aac"
       }
     },
-    "configuration_sha256": "9e9727fe7a442e0e181349073577dca9c2e72828416c88dfe5f9d446f2ee9b14",
+    "configuration_sha256": "3b96c26d328cffc308cb6de70e070748bba3c9fe7a7b229ccba6749f8aec2a91",
     "dataset_sha256": "a53731795058db4b4a0efff0b2a07f9eb859378f2ae2f9d365544f1e054b4f3f",
-    "evaluation_sha256": "277e82bc11232ffe69c73762bf13bb95450cf0706fde6263b0c94e405adfd24e",
-    "execution_source_sha256": "4877d27990478ebc2c1bea6fbd0273ba3fae1c469c414e648699573ec92c7d21",
-    "initialization_sha256": "08bfc6a63c37296dd518a5716036a234f64b7661321f26569ff14dbb857379e7",
+    "evaluation_sha256": "5a405fdff008137e9012062bcdbcb8c52d1caed128e84c5e3d4738fa13037b1c",
+    "feature_method_source_sha256": "3d406bf37d413334c166ce05e888cf4097a8d6b8c1c0fdb2e4e6852d05a7fa4e",
+    "feature_visualizations_sha256": "8b9faf02bce36b3b00f8239945903c775914c28b08b76af994b350b654f1c9a4",
+    "initialization_sha256": "1ca4bb60f28152f39fc783436d78b2f4c50dbae0c43d9ab4bdcb79ea54f03fdd",
+    "pre_export_git_commit": "4b399886ea43d773d98c1fbcc398213d6ba91ef4",
+    "pre_export_source_sha256": "ca425f77220734ada0a7348675b3b08080383c656fde4a267fcb04fd43cf672b",
+    "pre_export_worktree_dirty": true,
+    "preflight_source_sha256": "81a2bdd2625cb65a8f577e9607737524cfd8c6d89a562a949668514cbff3ce41",
     "public_assets": {
-      "docs/assets/cosine-drift.png": "6eed901e3a40b773293a02c89b13e41f2960eee4abf0d008bad634a2fd3dbe03",
-      "docs/assets/knn-retention-by-breed.png": "e457b919ac1d3585195d7e78bc7f2f87167f939750fba2e3cfa69eeee4a2c487"
+      "docs/assets/adversarial-activation_maximization-adversarial-synthetic-atlas.png": "5c3bd710c06e5a76cc4e238f39e5458d5f673e735e3606b9ee39090d5b754938",
+      "docs/assets/adversarial-initial_response_change-adversarial-initial-response-change.png": "1e534051c1e35772791395e2080e43d91da1cc0e932fc634588ca8f7092006ee",
+      "docs/assets/adversarial-kernels-adversarial-kernels.png": "2e983969fc500b89b1c2656595609d460c45906f105be96575d031cbd182cc32",
+      "docs/assets/adversarial-localization_summary-adversarial-localization-summary.png": "b3ea6d0bde0a17767d3c3ade3f047c8f98826c7c1a1a7c2646622a71782f97fb",
+      "docs/assets/adversarial-species_response-adversarial-species-response.png": "998eea31228da9817c1ed37b9cc100c72c3c53147b940b46ed72e2652d17f8b9",
+      "docs/assets/dataset-species_response-image-geometry.png": "b57ad6cc77d01e42e5bf67a3037b21ec7edc09f16ee4236462ebec19ccb5bf6d",
+      "docs/assets/dataset-species_response-split-and-species.png": "3f14052bdb985ba9fec059d112dc0251f57d69143f955bff36d8d1acdf07f3b4",
+      "docs/assets/dataset-species_response-target-balance.png": "74ee5de0728084162e1024954042d76929e790bd1fc929ccda6d637872a9d6b9",
+      "docs/assets/experiment-species_response-experiment-accuracy-context.png": "0c1fbfd44b7e1af4756592a0d7be961019c22a8a95621c725434d5c59b10b208",
+      "docs/assets/experiment-species_response-experiment-training-objectives.png": "814dcf32a04b60125fabacb5e54ea8333f43e1c400c7ebd2fa347d973dae3216",
+      "docs/assets/experiment-species_response-experiment-workflow.png": "50436087a06024ce033b041df6f8d954ee64d8dcdea3f67141201c0ffa9169f2",
+      "docs/assets/standard-activation_maximization-standard-synthetic-atlas.png": "dd6be15496cf9d526e907312a52002e8c66ac8d117088bd512bdcc9b5120976a",
+      "docs/assets/standard-initial_response_change-standard-initial-response-change.png": "7ae17907e2e9c1ca22a6c87b55186c98f2b39920d03675e2ee4f4ca3e569a651",
+      "docs/assets/standard-kernels-standard-kernels.png": "2036ba2d1dc715b7764572b72256653f85813052971a8207a213b5fc7229b7e9",
+      "docs/assets/standard-localization_summary-standard-localization-summary.png": "3f6ffd9f20f1d13d4b6bb6e22cd3d927e9240f3ea67337a08c01981d3be9d697",
+      "docs/assets/standard-species_response-standard-species-response.png": "1efb498f1a7e40fa454b9680982c135046084d6dba40ba5c1255494854db6b0f"
     },
     "public_reports": {
-      "reports/long_form_report.md": "e0179a6eb38271df0c9fd340fede8f2b0f008e2739d8315b6601d9e29443ae72",
-      "reports/technical_report.md": "201cb8ef8b7666068e0ac9c6a4c90651d0b26b00958e584f3fcd245dcf35adea"
+      "reports/long_form_report.md": "ec6d8b01d0b57f55ba260a6fb30721181769f060154bd441c64373db6aa443d5",
+      "reports/technical_report.md": "0d60fbd32139c1fb39f4b984d8ec41422dfe1e9a415993b991e1b4d714b00822"
     },
-    "representations_sha256": "58f32c537815384ae8d7cad95bab08b5098e4199818014ff2b1fb4721ecfdec5",
-    "split_sha256": "017d8f9ea63a8e58685ab9a29cc7343174241b7973025ff035314c37388190aa"
+    "split_sha256": "bf55f45547770c7c029b1ac23b50eb24ef15520195a57e01152fd9567967de9c"
   },
-  "registered_corruptions": {
-    "brightness-0.6": {
-      "adversarial_accuracy": 0.49277732352139547,
-      "adversarial_coverage": 0.7737803216135186,
-      "adversarial_selective_risk": 0.42021838675589995,
-      "standard_accuracy": 0.8765331152902698,
-      "standard_coverage": 0.880348868901608,
-      "standard_selective_risk": 0.07027863777089784
-    },
-    "brightness-0.8": {
-      "adversarial_accuracy": 0.6756609430362497,
-      "adversarial_coverage": 0.8735350231670755,
-      "adversarial_selective_risk": 0.26521060842433697,
-      "standard_accuracy": 0.8896156991005724,
-      "standard_coverage": 0.8868901608067593,
-      "standard_selective_risk": 0.06207744314689613
-    },
-    "contrast-0.5": {
-      "adversarial_accuracy": 0.25756336876533115,
-      "adversarial_coverage": 0.6538566366857455,
-      "adversarial_selective_risk": 0.681117132138391,
-      "standard_accuracy": 0.8408285636413192,
-      "standard_coverage": 0.8285636413191605,
-      "standard_selective_risk": 0.08026315789473684
-    },
-    "contrast-0.75": {
-      "adversarial_accuracy": 0.6358680839465795,
-      "adversarial_coverage": 0.8381030253475061,
-      "adversarial_selective_risk": 0.288130081300813,
-      "standard_accuracy": 0.886617606977378,
-      "standard_coverage": 0.8819841918778959,
-      "standard_selective_risk": 0.06613102595797281
-    },
-    "gaussian_blur-0.75": {
-      "adversarial_accuracy": 0.6901062959934587,
-      "adversarial_coverage": 0.8776233306077951,
-      "adversarial_selective_risk": 0.25124223602484475,
-      "standard_accuracy": 0.8539111474516217,
-      "standard_coverage": 0.8517307168165713,
-      "standard_selective_risk": 0.08256
-    },
-    "gaussian_blur-1.5": {
-      "adversarial_accuracy": 0.5750885799945489,
-      "adversarial_coverage": 0.8053965658217498,
-      "adversarial_selective_risk": 0.3455160744500846,
-      "standard_accuracy": 0.713818479149632,
-      "standard_coverage": 0.7151812482965386,
-      "standard_selective_risk": 0.17339939024390244
-    },
-    "gaussian_noise-0.02": {
-      "adversarial_accuracy": 0.7288089397656037,
-      "adversarial_coverage": 0.908149359498501,
-      "adversarial_selective_risk": 0.22569027611044418,
-      "standard_accuracy": 0.884709730171709,
-      "standard_coverage": 0.880348868901608,
-      "standard_selective_risk": 0.06501547987616099
-    },
-    "gaussian_noise-0.05": {
-      "adversarial_accuracy": 0.7244480784955029,
-      "adversarial_coverage": 0.9059689288634505,
-      "adversarial_selective_risk": 0.22743682310469315,
-      "standard_accuracy": 0.8122104115562824,
-      "standard_coverage": 0.7765058599073317,
-      "standard_selective_risk": 0.09687609687609687
-    }
-  },
-  "schema_version": 1,
+  "schema_version": 2,
   "secondary_policy_shift": {
     "adversarial": {
       "flagged_conditions": [
         {
           "condition": "gaussian_blur-0.75",
-          "coverage_delta_from_target": -0.02237666939220495,
-          "selective_risk_delta_from_clean": 0.0261821398709986
+          "coverage_delta_from_target": 0.058299264104660686,
+          "selective_risk_delta_from_clean": 0.043097405223332885
         },
         {
           "condition": "gaussian_blur-1.5",
-          "coverage_delta_from_target": -0.09460343417825023,
-          "selective_risk_delta_from_clean": 0.12045597829623844
+          "coverage_delta_from_target": 0.0989097846824748,
+          "selective_risk_delta_from_clean": 0.0718425531109082
         },
         {
           "condition": "brightness-0.8",
-          "coverage_delta_from_target": -0.02646497683292448,
-          "selective_risk_delta_from_clean": 0.040150512270490823
+          "coverage_delta_from_target": 0.0337694194603434,
+          "selective_risk_delta_from_clean": 0.024523321076605098
         },
         {
           "condition": "brightness-0.6",
-          "coverage_delta_from_target": -0.1262196783864814,
-          "selective_risk_delta_from_clean": 0.1951582906020538
+          "coverage_delta_from_target": 0.07710547833197057,
+          "selective_risk_delta_from_clean": 0.056705965730946606
         },
         {
           "condition": "contrast-0.75",
-          "coverage_delta_from_target": -0.061896974652493886,
-          "selective_risk_delta_from_clean": 0.06306998514696688
+          "coverage_delta_from_target": 0.06075224856909234,
+          "selective_risk_delta_from_clean": 0.04490264812508293
         },
         {
           "condition": "contrast-0.5",
-          "coverage_delta_from_target": -0.24614336331425457,
-          "selective_risk_delta_from_clean": 0.45605703598454483
+          "coverage_delta_from_target": 0.09727446170618692,
+          "selective_risk_delta_from_clean": 0.07073026835228913
         }
       ],
       "hypothesis_met": true
@@ -258,27 +1312,22 @@
       "flagged_conditions": [
         {
           "condition": "gaussian_noise-0.05",
-          "coverage_delta_from_target": -0.12349414009266835,
-          "selective_risk_delta_from_clean": 0.0357887419585648
-        },
-        {
-          "condition": "gaussian_blur-0.75",
-          "coverage_delta_from_target": -0.04826928318342871,
-          "selective_risk_delta_from_clean": 0.021472645082467927
+          "coverage_delta_from_target": -0.06952848187517036,
+          "selective_risk_delta_from_clean": 0.0
         },
         {
           "condition": "gaussian_blur-1.5",
-          "coverage_delta_from_target": -0.1848187517034614,
-          "selective_risk_delta_from_clean": 0.11231203532637038
+          "coverage_delta_from_target": -0.1316707549741074,
+          "selective_risk_delta_from_clean": 0.000354735721887194
         },
         {
           "condition": "contrast-0.5",
-          "coverage_delta_from_target": -0.07143635868083953,
-          "selective_risk_delta_from_clean": 0.019175802977204774
+          "coverage_delta_from_target": -0.06434995911692565,
+          "selective_risk_delta_from_clean": 0.0
         }
       ],
       "hypothesis_met": true
     }
   },
-  "status": "completed 15-epoch local reference experiment"
+  "status": "completed 15-epoch binary feature-study reference experiment"
 }

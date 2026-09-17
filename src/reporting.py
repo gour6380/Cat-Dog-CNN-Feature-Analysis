@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+from src.classifier_diagnostics import species_diagnostic_warning, species_prediction_diagnostic
 from src.config import ExperimentConfig
 from src.io_utils import (
     atomic_write_json,
@@ -43,8 +44,10 @@ def _number(value: object, digits: int = 4) -> str:
 
 def _condition_table(arm: str, evaluation: dict[str, Any]) -> str:
     rows = [
-        "| Condition | Accuracy | Macro accuracy | Coverage | Selective risk | ECE | AURC |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Condition | Accuracy | Macro accuracy | Cat accuracy | Dog accuracy | "
+        "NLL | Brier | Coverage | "
+        "Selective risk | ECE | AURC |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     conditions = evaluation["arms"][arm]["full_test"]
     for condition, metrics in conditions.items():
@@ -56,6 +59,10 @@ def _condition_table(arm: str, evaluation: dict[str, Any]) -> str:
                     condition,
                     _percent(metrics["accuracy"]),
                     _percent(metrics["macro_accuracy"]),
+                    _percent(metrics.get("per_class_accuracy", {}).get("0")),
+                    _percent(metrics.get("per_class_accuracy", {}).get("1")),
+                    _number(risk["nll"]),
+                    _number(risk["brier"]),
                     _percent(risk["coverage"]),
                     _percent(risk["selective_risk"]),
                     _number(risk["ece_15"]),
@@ -92,191 +99,364 @@ def _attack_table(config: ExperimentConfig, evaluation: dict[str, Any]) -> str:
     return "\n".join(rows)
 
 
-def _geometry_table(config: ExperimentConfig, representations: dict[str, Any]) -> str:
-    neighbours = config.integer("representations", "neighbours")
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _feature_table(features: dict[str, Any]) -> str:
     rows = [
-        "| Arm | Median cosine drift | Median relative-L2 | "
-        f"PGD {neighbours}-NN accuracy | PGD {neighbours}-NN retention | CKA |",
+        "| Arm | Layer | Spatial grid | Receptive field (px) | Selected channels | "
+        "Mean response change vs initialization |",
+        "|---|---|---:|---:|---|---:|",
+    ]
+    for arm in ("standard", "adversarial"):
+        for layer, metrics in features["arms"][arm]["layers"].items():
+            spatial = "×".join(str(size) for size in metrics["spatial_shape"])
+            channels = ", ".join(str(channel) for channel in metrics["selected_channels"])
+            change = _mean(metrics["relative_change_from_initial"])
+            rows.append(
+                f"| {arm} | `{layer}` | {spatial} | "
+                f"{metrics['receptive_field_pixels']} | {channels} | {_number(change)} |"
+            )
+    return "\n".join(rows)
+
+
+def _localization_table(features: dict[str, Any]) -> str:
+    rows = [
+        "| Arm | Test anchors | Top-CAM occlusion mean margin drop | "
+        "Equal-area random occlusion mean margin drop | Mean randomized-model CAM correlation | "
+        "Defined CAM correlations |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for arm in ("standard", "adversarial"):
-        geometry = representations["geometry"][arm]
+        anchors = features["arms"][arm]["anchors"]
+        values = {
+            key: _mean([float(anchor[key]) for anchor in anchors if anchor[key] is not None])
+            for key in (
+                "top_gradcam_occlusion_mean_drop",
+                "random_occlusion_mean_drop",
+                "randomization_cam_correlation",
+            )
+        }
+        defined_correlations = sum(
+            anchor["randomization_cam_correlation"] is not None for anchor in anchors
+        )
         rows.append(
-            f"| {arm} | {_number(geometry['cosine_drift']['median'])} | "
-            f"{_number(geometry['relative_l2_drift']['median'])} | "
-            f"{_percent(geometry['knn']['pgd_accuracy'])} | "
-            f"{_percent(geometry['knn']['pgd_retention'])} | "
-            f"{_number(geometry['linear_cka_clean_to_pgd'])} |"
+            f"| {arm} | {len(anchors)} | "
+            f"{_number(values['top_gradcam_occlusion_mean_drop'])} | "
+            f"{_number(values['random_occlusion_mean_drop'])} | "
+            f"{_number(values['randomization_cam_correlation'])} | "
+            f"{defined_correlations}/{len(anchors)} |"
         )
     return "\n".join(rows)
 
 
-def _claim(primary: dict[str, Any]) -> str:
-    if primary["primary_supported"]:
-        return (
-            "Both registered criteria passed: under this fixed finite digital attack, the "
-            "adversarially trained model retained the measured penultimate structure better."
+def _anchor_table(features: dict[str, Any]) -> str:
+    rows = [
+        "| Arm | Sample | True species | Clean prediction | Clean margin | "
+        "PGD prediction | PGD margin |",
+        "|---|---|---|---|---:|---|---:|",
+    ]
+    names = ("cat", "dog")
+    for arm in ("standard", "adversarial"):
+        for anchor in features["arms"][arm]["anchors"]:
+            rows.append(
+                f"| {arm} | `{anchor['sample_id']}` | {names[anchor['label']]} | "
+                f"{names[anchor['prediction']]} | {_number(anchor['clean_margin'])} | "
+                f"{names[anchor['pgd_prediction']]} | {_number(anchor['pgd_margin'])} |"
+            )
+    return "\n".join(rows)
+
+
+def _species_diagnostics(evaluation: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        arm: species_prediction_diagnostic(evaluation["arms"][arm]["full_test"]["clean"])
+        for arm in ("standard", "adversarial")
+    }
+
+
+def _species_diagnostic_section(evaluation: dict[str, Any]) -> str:
+    """Make observed classifier failure explicit without inferring feature collapse."""
+
+    diagnostics = _species_diagnostics(evaluation)
+    available = {
+        arm: diagnostic for arm, diagnostic in diagnostics.items() if diagnostic["available"]
+    }
+    if not available:
+        return ""
+    warnings = [
+        f"> {arm} arm — {warning}"
+        for arm, diagnostic in available.items()
+        if (warning := species_diagnostic_warning(diagnostic))
+    ]
+    rows = [
+        "| Arm | True cats | True dogs | Predicted cats | Predicted dogs | "
+        "Cat recall | Dog recall | Macro accuracy | Clean-test status |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for arm, diagnostic in available.items():
+        status = (
+            "FAILED comparison: single-species prediction"
+            if diagnostic["observed_single_class_prediction"]
+            else "Both species predicted; robustness not inferred"
         )
+        rows.append(
+            f"| {arm} | {diagnostic['true_counts']['cat']} | "
+            f"{diagnostic['true_counts']['dog']} | "
+            f"{diagnostic['prediction_counts']['cat']} | "
+            f"{diagnostic['prediction_counts']['dog']} | "
+            f"{_percent(diagnostic['per_species_recall']['cat'])} | "
+            f"{_percent(diagnostic['per_species_recall']['dog'])} | "
+            f"{_percent(diagnostic['macro_accuracy'])} | {status} |"
+        )
+    interpretation = (
+        "A single-species arm is retained as a failed comparison, not useful robust cat/dog "
+        "recognition. Its channel and attribution pictures are failure diagnostics. Hidden "
+        "features may remain variable even when all observed clean decisions select one "
+        "species; the cause of the classifier failure remains unproven."
+        if warnings
+        else "Counts describe this observed clean test, not every possible input. Predicting "
+        "both species is not by itself evidence of useful robustness or semantic understanding."
+    )
     return (
-        "The conjunctive primary hypothesis was not supported. Any favorable individual metric "
-        "is reported as mixed evidence rather than promoted to a robustness conclusion."
+        "## Clean species predictions and failure status\n\n"
+        + "\n\n".join(warnings)
+        + ("\n\n" if warnings else "")
+        + "\n".join(rows)
+        + "\n\n"
+        + interpretation
+        + "\n"
+    )
+
+
+def _synthetic_optimization_note(features: dict[str, Any]) -> str:
+    """Disclose unsuccessful fixed-start stimuli without labeling channels dead."""
+
+    trials = 0
+    failed: list[tuple[str, str, dict[str, Any], float | None, float | None]] = []
+    for arm, arm_result in features["arms"].items():
+        for layer, metrics in arm_result["layers"].items():
+            for response in metrics.get("synthetic_responses", []):
+                trials += 1
+                if response["unregularized_response_gain"] != 0.0:
+                    continue
+                channels = metrics["selected_channels"]
+                index = channels.index(response["channel"])
+                means = metrics.get("calibration_mean_by_species")
+                cat = None if means is None else float(means[0][index])
+                dog = None if means is None else float(means[1][index])
+                failed.append((arm, layer, response, cat, dog))
+    if not failed:
+        return ""
+    rows = [
+        "| Arm | Layer | Channel | Seeded initial response | Final response | Gain | "
+        "Real calibration mean: cat | Real calibration mean: dog |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for arm, layer, response, cat, dog in failed:
+        rows.append(
+            f"| {arm} | `{layer}` | {response['channel']} | "
+            f"{_number(response['initial_unregularized_mean_response'])} | "
+            f"{_number(response['final_unregularized_mean_response'])} | "
+            f"{_number(response['unregularized_response_gain'])} | "
+            f"{_number(cat)} | {_number(dog)} |"
+        )
+    positive_real_response = all(
+        cat is not None and dog is not None and max(cat, dog) > 0
+        for _arm, _layer, _response, cat, dog in failed
+    )
+    verification = (
+        "These channels respond positively to real calibration images, as shown above. "
+        if positive_real_response
+        else "Inspect real calibration responses before interpreting these channels. "
+    )
+    return (
+        "### Gray synthetic tiles: zero-gain trials retained\n\n"
+        f"{len(failed)} of {trials} recorded single-start synthetic optimization trials had "
+        "zero unregularized response gain. Their gray/blank tiles are unsuccessful stimuli, "
+        "not evidence of dead channels or that the model learned nothing.\n\n"
+        + "\n".join(rows)
+        + "\n\n"
+        + verification
+        + "The fixed seeds, selected channels, and optimization budget were preserved; "
+        "no retry or replacement was used to make the atlas look better. Initial/final "
+        "responses are measured on unjittered inputs, not the regularized optimization loss.\n"
     )
 
 
 def _technical_report(
-    config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
+    config: ExperimentConfig, evaluation: dict[str, Any], features: dict[str, Any]
 ) -> str:
-    primary = representations["primary_hypothesis"]
-    attack_label = _attack_label(config)
-    epsilon = config.number("attack", "epsilon")
-    epochs = config.integer("training", "epochs")
-    feature_dim = config.integer("model", "feature_dim")
-    classes = config.integer("dataset", "classes")
-    neighbours = config.integer("representations", "neighbours")
+    limitations = "\n".join(f"- {item}" for item in features["limitations"])
     target_coverage = 100.0 * config.number("calibration", "target_coverage")
-    return f"""# Technical report: adversarial representation drift in Oxford-IIIT Pet
+    return f"""# Technical report: cat and dog CNN feature learning and localization
 
-Generated from the fixed machine-readable evidence completed on
-{representations["created_at"]}.
+Fixed evidence snapshot completed on {features["created_at"]}.
 
-## Registered decision
+{_species_diagnostic_section(evaluation)}
 
-{_claim(primary)} The adversarial-minus-standard median cosine-drift difference was
-`{_number(primary["drift_difference_adversarial_minus_standard"], 6)}` with 95% interval
-`[{_number(primary["drift_ci95"][0], 6)}, {_number(primary["drift_ci95"][1], 6)}]`.
-The {neighbours}-neighbour retention difference was
-`{_number(primary["retention_difference_adversarial_minus_standard"], 6)}` with 95% interval
-`[{_number(primary["retention_ci95"][0], 6)}, {_number(primary["retention_ci95"][1], 6)}]`.
+## Question and scope
+
+What patterns activate early, middle, and late CNN channels, and where do the selected
+channels and cat/dog classifier respond within actual images? This is a two-class species
+study, not a 37-breed projection study. Breed metadata remains available and the official
+trainval partition is split within each breed; the official test partition stays untouched.
+
+Both ResNet-18 arms start from identical ImageNet tensors and an identical new binary head.
+The standard arm trains on clean inputs; the adversarial arm trains on bounded PGD inputs.
+These are fixed epoch-{config.integer("training", "epochs")} checkpoints, not test-selected
+checkpoints.
 
 ## Classification and finite attacks
 
+The clean attack-subset accuracy and FGSM/PGD robust accuracies below use the same
+{config.integer("dataset", "attack_per_class") * config.integer("dataset", "classes")}
+hash-selected test images, balanced by target species. The full official test contains
+{config.integer("dataset", "expected_test")} images and its accuracy is reported separately.
+
 {_attack_table(config, evaluation)}
 
-{attack_label} is a finite untargeted `L∞` evaluation at `epsilon={epsilon:.8g}`; it is not a proof
-against stronger, adaptive, physical, or unrestricted attacks. Attack success uses only
-samples classified correctly before attack. Both models are their configured epoch-{epochs} states.
+{_attack_label(config)} is finite untargeted `L∞` search with
+`epsilon={config.number("attack", "epsilon"):.8g}`. Attack success is measured among
+clean-correct samples. The search is not certified, physical, or unrestricted robustness.
 
-## Original-feature geometry
+## Hierarchical feature diagnostics
 
-{_geometry_table(config, representations)}
+{_feature_table(features)}
 
-All values above use the original {feature_dim}-dimensional penultimate features. PCA, t-SNE,
-and UMAP figures are explanatory and their independently fitted model coordinates are
-not compared numerically.
+Channels were selected from clean calibration responses, not test-image appearance.
+First-layer kernels show learned weights. Activation-maximization images are synthetic
+inputs optimized to excite a fixed channel; they are not recovered training photographs.
+Response changes compare the same selected channels on the same calibration images against
+the matched ImageNet initialization. They do not identify a named semantic concept.
 
-## Standard model: full official test and registered shifts
+{_synthetic_optimization_note(features)}
+
+Activation maps locate responses on the transformed input. Highlighted receptive-field
+boxes describe theoretical input support for an activation, not the precise pixels that
+caused it. Later receptive fields can exceed the entire input image.
+
+## Class localization and controls
+
+{_localization_table(features)}
+
+Grad-CAM differentiates the fixed true-species logit, including on classification errors.
+Occlusion measures the true-species-minus-other-species logit margin on the same input:
+these are related but different scalar objectives. Equal-area image regions are replaced,
+comparing high-CAM tiles with deterministic random tiles. A positive drop means the
+intervention reduced the true-species margin. Randomization checks whether CAM changes
+when the trained model is
+randomized. These are limited descriptive diagnostics, not causal proof of what a filter
+learned, not training-source attribution, and not proof that the object is the only cue.
+Constant trained or randomized CAMs have undefined correlation; the mean excludes them
+and the defined-count column makes that omission explicit. Undefined is not zero.
+
+{_anchor_table(features)}
+
+## Standard arm: full official test and registered shifts
 
 {_condition_table("standard", evaluation)}
 
-## Adversarial model: full official test and registered shifts
+## Adversarial arm: full official test and registered shifts
 
 {_condition_table("adversarial", evaluation)}
 
-Temperatures and {target_coverage:g}%-coverage thresholds were fitted only on the
-deterministic clean calibration partition. They were not refitted to the official test
-set or any attack or corruption. Confidence is not presented as an out-of-distribution
-detector.
+Scalar temperatures and {target_coverage:g}%-target confidence thresholds use only clean
+calibration data; they are frozen for every test, corruption, and attack condition.
+Confidence is not an out-of-distribution detector.
 
-## Difficult-pair boundary
+## Figures and distribution
 
-The shared pair was classes `{representations["difficult_pair_selection"]["first_class"]}`
-and `{representations["difficult_pair_selection"]["second_class"]}`, selected by maximum
-symmetric clean-calibration confusion, then minimum centroid distance and class ID. Each
-line is the exact equality of those two linear-head logits restricted to that model's own
-PCA plane with undisplayed coordinates fixed at the calibration mean. It is not an input-
-space boundary or a complete {classes}-class decision map.
+Synthetic feature montages, kernel grids, and aggregate charts may be exported.
+Actual pet images, feature-map overlays, Grad-CAM, occlusion panels, and receptive-field
+crops remain in ignored local analysis outputs. The generated notebook can display them
+locally, but they are not silently included in the public repository.
 
-## Limitations and competing explanations
+## Limitations
 
-- ImageNet initialization may account for substantial geometry before fine-tuning.
-- Oxford-IIIT Pet has limited examples per breed; a single split and seed limit scope.
-- PCA, t-SNE, and UMAP distort different relationships and cannot validate robustness.
-- {attack_label} is finite; failure to find an adversarial example does not prove none exists.
-- Synthetic pixel corruptions do not establish physical robustness or safe recognition.
-- Optimization dynamics—not adversarial invariance alone—may explain observed geometry.
+{limitations}
 
-Configuration SHA-256: `{config.sha256}`. Full provenance and artifact hashes are in
-`local-release-manifest.json`.
+There is no bootstrap representation-retention claim in this revised study. No named
+concept, exact causal training source, physical robustness, or safer recognition claim
+is made. Configuration SHA-256: `{config.sha256}`. Checkpoint/source/evidence hashes are
+recorded in `local-release-manifest.json`.
 """
 
 
 def _long_form(
-    config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
+    config: ExperimentConfig, evaluation: dict[str, Any], features: dict[str, Any]
 ) -> str:
-    primary = representations["primary_hypothesis"]
-    standard_clean = evaluation["arms"]["standard"]["full_test"]["clean"]["accuracy"]
-    adversarial_clean = evaluation["arms"]["adversarial"]["full_test"]["clean"]["accuracy"]
-    standard_robust = evaluation["arms"]["standard"]["attack_subset"]["pgd"]["robust_accuracy"]
-    adversarial_robust = evaluation["arms"]["adversarial"]["attack_subset"]["pgd"][
-        "robust_accuracy"
-    ]
-    classes = config.integer("dataset", "classes")
-    training_steps = config.integer("attack", "train_steps")
-    attack_label = _attack_label(config)
-    attack_samples = config.integer("dataset", "attack_per_class") * classes
-    input_size = config.integer("input", "size")
-    return f"""# What adversarial training changed inside a {classes}-breed pet classifier
+    standard = evaluation["arms"]["standard"]
+    adversarial = evaluation["arms"]["adversarial"]
+    return f"""# Seeing what a cat/dog CNN responds to
 
-Two ResNet-18 models began from the same ImageNet tensors, the same newly initialized
-{classes}-class head, the same ordered samples and deterministic crops, and the same number of
-optimizer updates. The only experimental arm difference was whether training examples
-were clean or generated by {training_steps}-step bounded PGD.
+{_species_diagnostic_section(evaluation)}
 
-The registered question was not whether one embedding picture looked cleaner. It was
-whether paired features moved less under PGD and kept more same-breed neighbours in the
-original {config.integer("model", "feature_dim")}-dimensional space. {_claim(primary)}
+Two ImageNet-initialized ResNet-18 models were fine-tuned for a binary cat-versus-dog task from the
+official Oxford-IIIT Pet dataset. Matched initialization, image order, crops, and optimizer
+updates isolate clean versus PGD-{config.integer("attack", "train_steps")} training.
 
-Clean official-test accuracy was {_percent(standard_clean)} for standard fine-tuning and
-{_percent(adversarial_clean)} for adversarial fine-tuning. On the fixed
-{attack_samples}-image finite {attack_label} subset, robust accuracy was
-{_percent(standard_robust)} and {_percent(adversarial_robust)}, respectively. These clean
-results are trade-offs, not a pre-registered directional win.
+The feature story is now visual and layer-by-layer: kernel weights in the first layer,
+synthetic activation-maximization stimuli, actual-image activation maps, and receptive-field
+crops for selected channels. Channels are selected using calibration responses so the
+test images are explanations, not a mechanism for cherry-picking the selection.
 
-The visualization lesson matters as much as the result. PCA preserves dominant linear
-variance; t-SNE reconstructs local relationships in a joint sample; UMAP transforms from
-a learned neighbourhood graph. Their stories can differ without any contradiction—and
-without proving robustness. That is why the decision used aligned original features,
-class-stratified uncertainty, attacks with checked bounds, and a conjunctive rule.
+{_synthetic_optimization_note(features)}
 
-Confidence policies exposed a second boundary. Each temperature and threshold came only
-from clean calibration data. After the inputs shifted, realized coverage and selective
-risk were measured without refitting. This is evidence about one frozen confidence rule,
-not an OOD detector and not a safety system.
+The distinction is important: a synthesized edge or texture is an input that excites a
+channel. It does not prove that the channel learned the named concept we attach to it.
+An activation map shows where a response occurs; its receptive-field box is theoretical
+support, not an exact causal explanation.
 
-The narrow conclusion applies to Oxford-IIIT Pet, this split, these seeds, ResNet-18,
-{input_size}-pixel inputs, and a finite digital `L∞` threat model. ImageNet pretraining, small
-per-breed sample sizes, projection distortion, and incomplete attack coverage remain
-credible competing explanations and limitations.
+Class-specific Grad-CAM asks a different question: where does the fixed true-species logit
+respond? Equal-area top-CAM versus random occlusion measures the true-vs-other margin,
+a related but different objective, and randomized-model controls probe weight dependence.
+They provide descriptive checks, not a causal account of the training process.
+
+Clean full-test accuracy on {config.integer("dataset", "expected_test")} official test images
+is {_percent(standard["full_test"]["clean"]["accuracy"])} for
+standard training and {_percent(adversarial["full_test"]["clean"]["accuracy"])} for PGD
+training. Finite {_attack_label(config)} robust accuracy on the paired
+{config.integer("dataset", "attack_per_class") * config.integer("dataset", "classes")}-image
+species-balanced subset is
+{_percent(standard["attack_subset"]["pgd"]["robust_accuracy"])} and
+{_percent(adversarial["attack_subset"]["pgd"]["robust_accuracy"])}, respectively.
+
+{_localization_table(features)}
+
+The scope remains one dataset, one architecture, and one split/seed family.
+ImageNet-pretrained features, synthetic optimization artifacts, backgrounds, finite attack
+search, and coarse localization are credible limitations. No physical or safe-use
+conclusion follows. Original pet photos remain local; public visuals are synthetic or
+aggregate.
 """
 
 
 def _sunday_draft(
-    config: ExperimentConfig, evaluation: dict[str, Any], representations: dict[str, Any]
+    config: ExperimentConfig, evaluation: dict[str, Any], features: dict[str, Any]
 ) -> str:
-    primary = representations["primary_hypothesis"]
-    classes = config.integer("dataset", "classes")
-    train_steps = config.integer("attack", "train_steps")
-    feature_dim = config.integer("model", "feature_dim")
-    neighbours = config.integer("representations", "neighbours")
-    attack_label = _attack_label(config)
-    return f"""# Sunday draft — the embedding plot was not the result
+    return f"""# Sunday draft — what a CNN feature picture actually tells us
 
-I trained matched standard and PGD-{train_steps} ResNet-18 models on all {classes}
-Oxford-IIIT Pet breeds. The tempting output was six colourful PCA, t-SNE, and UMAP
-panels. The actual test was in the original {feature_dim}-dimensional feature space.
+{_species_diagnostic_section(evaluation)}
 
-Registered outcome: {_claim(primary)}
+I changed this pet-recognition study from breed embedding plots to visual inspection of
+a cat/dog CNN: early/middle/late channel stimuli, image activation maps, receptive-field
+crops, class-specific Grad-CAM, and occlusion controls.
 
-I required both a lower bootstrapped median cosine drift and higher {neighbours}-neighbour breed
-retention under finite {attack_label}. I also froze clean-calibrated temperature/coverage rules
-before testing noise, blur, brightness, and contrast shifts.
+An optimized feature image answers: what synthetic input excites this channel?
+An activation map answers: where did this channel respond on this image?
+Grad-CAM answers: where does the fixed true-species logit receive supporting signal?
+Occlusion measures changes to its true-vs-other logit margin, not the identical scalar.
 
-The durable lesson: projections answer different visualization questions. They do not,
-by themselves, show that a model is robust. That claim needs paired quantitative evidence,
-attack validation, uncertainty, counterexamples, and a threat model.
+None alone identifies the exact training pixels that created the feature, proves a named
+semantic concept, or establishes robustness. The same study retains matched clean and
+PGD training, finite {_attack_label(config)} evaluation, and frozen clean-calibrated
+confidence policies.
+
+{_localization_table(features)}
 
 Scope: one dataset, one architecture, one split/seed family, and bounded digital attacks.
-No physical-robustness or safety claim.
+No causal training-source, physical-robustness, or safety claim.
 
 Status: draft only; not approved or published.
 """
@@ -290,10 +470,9 @@ def _release_files(config: ExperimentConfig) -> list[Path]:
         config.root / "configs",
         config.root / "docs",
         config.project_path("artifacts"),
-        config.project_path("results"),
-        config.project_path("figures"),
+        config.project_path("results") / "per_sample",
         config.project_path("reports"),
-        config.project_path("checkpoints"),
+        config.project_path("checkpoints") / config.sha256[:16],
     ]
     files: list[Path] = [
         config.root / "README.md",
@@ -301,9 +480,21 @@ def _release_files(config: ExperimentConfig) -> list[Path]:
         config.root / "requirements.txt",
         config.root / "setup_venv.sh",
     ]
+    files.extend(
+        config.project_path("results") / name
+        for name in ("evaluation.json", "feature_visualizations.json", "eda.json", "summary.json")
+    )
+    feature_path = config.project_path("results") / "feature_visualizations.json"
+    if feature_path.is_file():
+        features = _load(feature_path)
+        files.extend(config.root / figure["path"] for figure in features["figures"])
     for root in roots:
         if root.is_dir():
-            files.extend(path for path in root.rglob("*") if path.is_file())
+            files.extend(
+                path
+                for path in root.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            )
     manifest_path = config.project_path("artifacts") / "release" / "local-release-manifest.json"
     return sorted(
         {path.resolve() for path in files if path.is_file() and path.resolve() != manifest_path}
@@ -311,33 +502,51 @@ def _release_files(config: ExperimentConfig) -> list[Path]:
 
 
 def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
-    status("Report: loading verified evaluation and representation evidence...", enabled=progress)
+    status("Report: loading verified evaluation and CNN feature evidence...", enabled=progress)
     evaluation = _load(config.project_path("results") / "evaluation.json")
-    representations = _load(config.project_path("results") / "representations.json")
+    features = _load(config.project_path("results") / "feature_visualizations.json")
     if evaluation.get("config_sha256") != config.sha256:
         raise ReportError("evaluation belongs to another configuration")
-    if representations.get("config_sha256") != config.sha256:
-        raise ReportError("representation results belong to another configuration")
+    if features.get("config_sha256") != config.sha256:
+        raise ReportError("feature diagnostics belong to another configuration")
+    for arm in ("standard", "adversarial"):
+        if features["arms"][arm].get("state_unchanged") is not True:
+            raise ReportError(f"{arm} model state changed during feature analysis")
+        checkpoint_hash = sha256_file(checkpoint_path(config, cast(Any, arm)))
+        if features["arms"][arm].get("checkpoint_sha256") != checkpoint_hash:
+            raise ReportError(f"{arm} feature checkpoint identity is invalid")
+        if evaluation["arms"][arm].get("checkpoint_sha256") != checkpoint_hash:
+            raise ReportError(f"{arm} evaluation checkpoint identity is invalid")
     destination = config.project_path("reports")
     technical = destination / "technical-report.md"
     long_form = destination / "robust-vision-long-form-report.md"
     sunday = destination / "sunday-draft.md"
-    atomic_write_text(technical, _technical_report(config, evaluation, representations))
-    atomic_write_text(long_form, _long_form(config, evaluation, representations))
-    atomic_write_text(sunday, _sunday_draft(config, evaluation, representations))
-    primary = representations["primary_hypothesis"]
+    atomic_write_text(technical, _technical_report(config, evaluation, features))
+    atomic_write_text(long_form, _long_form(config, evaluation, features))
+    atomic_write_text(sunday, _sunday_draft(config, evaluation, features))
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now(),
         "config_sha256": config.sha256,
-        "primary_supported": primary["primary_supported"],
-        "primary": primary,
+        "study": "binary species CNN feature learning and localization",
+        "clean_species_prediction_diagnostics": _species_diagnostics(evaluation),
+        "feature_evidence_sha256": sha256_file(
+            config.project_path("results") / "feature_visualizations.json"
+        ),
+        "feature_diagnostics": {
+            "calibration_sample_count": len(features["selection"]["calibration_sample_ids"]),
+            "test_anchor_count": len(features["selection"]["test_anchor_ids"]),
+            "model_states_unchanged": True,
+        },
         "secondary_policy_shift": evaluation["secondary_policy_shift"],
         "reports": [str(path.relative_to(config.root)) for path in (technical, long_form, sunday)],
         "approval": "not requested",
         "publication": "not performed",
     }
     atomic_write_json(config.project_path("results") / "summary.json", summary)
+    from src.feature_results_notebook import build_feature_results_notebook
+
+    build_feature_results_notebook(config)
     files = _release_files(config)
     manifest = {
         "schema_version": 1,
@@ -356,7 +565,9 @@ def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]
             for arm in ("standard", "adversarial")
         },
         "files": {str(path.relative_to(config.root)): sha256_file(path) for path in files},
-        "contains_original_photographs": False,
+        "contains_original_photographs": any(
+            not figure["shareable"] for figure in features["figures"]
+        ),
         "public_actions": [],
     }
     manifest_path = config.project_path("artifacts") / "release" / "local-release-manifest.json"

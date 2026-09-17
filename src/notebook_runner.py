@@ -55,7 +55,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str | None = None)
     require_project_environment()
     config = load_config(config_path)
     requested_device = requested or config.value("training", "device", str)
-    source_path = ROOT / "notebooks" / "oxford_pets_adversarial_representations.ipynb"
+    source_path = ROOT / "notebooks" / "cat_dog_cnn_features.ipynb"
     notebook = nbformat.read(source_path, as_version=4)  # type: ignore[no-untyped-call]
     nbformat.validate(notebook)
     if any(
@@ -64,7 +64,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str | None = None)
         raise RuntimeError("source notebook must remain output-free")
     run_id = f"{utc_now().replace(':', '').replace('+', '-')}-{uuid.uuid4().hex[:8]}"
     directory = config.project_path("artifacts") / "notebooks" / run_id
-    output = directory / "oxford_pets_adversarial_representations.executed.ipynb"
+    output = directory / "cat_dog_cnn_features.executed.ipynb"
     manifest_path = directory / "manifest.json"
     source_before = source_hash(ROOT)
     environment = {
@@ -126,7 +126,7 @@ def run_notebook(config_path: Path, *, full: bool, requested: str | None = None)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Execute the Week 3 guide; --full explicitly enables scientific stages"
+        description="Execute the cat/dog CNN guide; --full explicitly enables scientific stages"
     )
     parser.add_argument("--config", type=Path, default=ROOT / "configs" / "experiment.yaml")
     parser.add_argument("--device", choices=("mps", "cpu"))

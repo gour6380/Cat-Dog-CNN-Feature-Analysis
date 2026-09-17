@@ -298,7 +298,7 @@ def evaluate(
         attack_restarts = config.integer("attack", "evaluation_restarts")
         attack_per_class = config.integer("dataset", "attack_per_class")
         attack_label = f"PGD-{attack_steps}×{attack_restarts}"
-        attack_partition = f"fixed {attack_per_class}-per-breed test subset"
+        attack_partition = f"fixed {attack_per_class}-per-target-class test subset"
         status(
             f"Evaluation: checking epoch-{epochs} checkpoints and running on {device.type}...",
             enabled=progress,

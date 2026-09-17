@@ -7,7 +7,7 @@ import json
 import platform
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import yaml  # type: ignore[import-untyped]
 
@@ -26,6 +26,15 @@ class ExperimentConfig:
     root: Path
     raw: dict[str, Any]
     sha256: str
+
+    @property
+    def label_mode(self) -> Literal["breed", "species"]:
+        """Prediction target, distinct from the retained breed metadata."""
+
+        value = self.section("dataset").get("label_mode", "breed")
+        if not isinstance(value, str) or value not in {"breed", "species"}:
+            raise ConfigError("dataset.label_mode must be breed or species")
+        return cast(Literal["breed", "species"], value)
 
     def section(self, name: str) -> dict[str, Any]:
         value = self.raw.get(name)
@@ -100,6 +109,8 @@ def validate_config(config: ExperimentConfig) -> None:
     model_classes = config.integer("model", "classes")
     if dataset_classes <= 1 or model_classes != dataset_classes:
         raise ConfigError("dataset.classes and model.classes must match and exceed one")
+    if config.label_mode == "species" and dataset_classes != 2:
+        raise ConfigError("species targets use two classes: cat=0 and dog=1")
 
     positive_integers = (
         ("dataset", "expected_trainval"),

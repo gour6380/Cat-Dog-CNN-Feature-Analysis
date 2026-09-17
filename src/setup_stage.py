@@ -54,6 +54,8 @@ def setup_experiment(config: ExperimentConfig, *, progress: bool = True) -> dict
         "status": "complete",
         "created_at": utc_now(),
         "config_sha256": config.sha256,
+        "label_mode": config.label_mode,
+        "target_classes": config.integer("dataset", "classes"),
         "source_sha256": source_hash(config.root),
         "requirements_sha256": sha256_file(requirements),
         "data": data_manifest,

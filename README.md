@@ -1,213 +1,200 @@
-# Adversarial Representation Drift in Fine-Grained Pet Recognition
+# Cat/Dog CNN Features: What Responds, and Where?
 
-[Results](docs/results.md) ·
-[Visual explanation](notebooks/oxford_pets_results_explained.ipynb) ·
 [Protocol](docs/PROTOCOL.md) · [Configuration](configs/experiment.yaml) ·
-[Guided notebook](notebooks/oxford_pets_adversarial_representations.ipynb) ·
-[Source](src/) · [Tests](tests/)
+[Guided notebook](notebooks/cat_dog_cnn_features.ipynb) · [Source](src/) ·
+[Tests](tests/) · [GitHub handoff](docs/github.md)
 
-This local, self-contained experiment compares two matched ImageNet-initialized
-ResNet-18 models across all 37 Oxford-IIIT Pet breeds. One model receives standard
-fine-tuning and the other receives PGD-5 adversarial fine-tuning. The primary result
-is based on original 512-dimensional penultimate features, not on a visually pleasing
-projection.
+This study visualizes learned CNN features, rather than two-dimensional embeddings.
+It asks what patterns a ResNet-18 channel responds to, where those patterns occur in
+real pet images, and which image regions affect a Cat/Dog prediction. A matched
+standard/PGD-trained comparison adds a bounded digital-attack stress test.
 
-The claim boundary is deliberately narrow: the study can support representation
-retention under a fixed digital `L∞` attack. It cannot establish physical robustness,
-safe pet recognition, out-of-distribution detection, or production readiness.
+**Task:** Oxford-IIIT Pet species classification: `cat=0`, `dog=1`. The original
+37-breed annotations remain useful for stratifying the data split and describing EDA;
+the network has a two-class head, not a breed prediction head.
 
-**Status:** the matched 15-epoch experiment completed on PyTorch MPS. The registered
-representation hypothesis passed. PGD-5 fine-tuning preserved substantially more
-penultimate structure and improved finite-attack robust accuracy, while reducing clean
-and corruption accuracy. This is one model pair and one split/seed family.
+**Status: fresh 15-epoch binary experiment and illustrated feature analysis complete.**
+The earlier 37-breed PCA/t-SNE/UMAP study is superseded, not
+relabeled. The obsolete `oxford_pets_results_explained.ipynb` is removed from the
+active workflow. All current evidence must match the new two-class checkpoints.
 
-## Completed results
+The standard model correctly classifies **3,646/3,669 clean test images (99.37%)**.
+The PGD-trained comparison **fails species recognition**: every clean-test prediction
+is dog, so its 67.76% accuracy is just the dog proportion. Cat recall is 0%, dog recall
+100%, and macro accuracy 50%. Its 50% survival on the balanced 200-image attack set
+is not useful robust Cat/Dog recognition. Hidden features and scores still vary;
+single-class decisions do not imply constant hidden features. The failure mechanism
+is unproven and was not hidden by changing the protocol or selecting another checkpoint.
+Use the standard model for the main learned-feature walkthrough, with the failed
+PGD arm retained as a cautionary comparison.
 
-| Metric | Standard | PGD-trained |
-|---|---:|---:|
-| Clean accuracy, full official test | 89.15% | 72.91% |
-| FGSM robust accuracy, 740-image subset | 2.84% | 31.08% |
-| PGD-20×5 robust accuracy, 740-image subset | 0.00% | 20.68% |
-| PGD attack success among clean-correct images | 100.00% | 71.51% |
-| Median clean-to-PGD cosine feature drift | 0.4531 | 0.0378 |
-| PGD five-NN breed retention | 0.11% | 25.62% |
-| PGD five-NN accuracy | 0.00% | 27.57% |
-| Clean-to-PGD linear CKA | 0.1669 | 0.8627 |
+[Measured results and charts](docs/results.md) ·
+[Technical report](reports/technical_report.md) ·
+[Long-form explanation](reports/long_form_report.md)
 
-The adversarial-minus-standard median-drift difference was `-0.415384`, with a
-class-stratified 95% bootstrap interval of `[-0.423403, -0.408943]`. The neighbour-
-retention difference was `+25.51` percentage points, interval `[23.54, 27.62]`. Both
-registered signs passed. These intervals cover paired test-sample uncertainty, not
-variation from retraining.
+![Low/mid/high synthetic channel preferences](docs/assets/standard-activation_maximization-standard-synthetic-atlas.png)
 
-| Paired feature drift | Per-breed neighbour retention |
-|---|---|
-| ![Distribution of paired cosine feature drift](docs/assets/cosine-drift.png) | ![Five-nearest-neighbour breed retention by breed](docs/assets/knn-retention-by-breed.png) |
+These are optimized channel preferences, not recovered photographs or verified
+object-part detectors. The local illustrated notebook pairs them with real input
+regions and prediction-influence maps.
 
-The standard model had higher absolute accuracy on every registered noise, blur,
-brightness, and contrast condition. Clean-fitted 90%-coverage confidence policies also
-moved outside their registered coverage/risk tolerances after at least one shift for both
-arms. Lower clean ECE for the adversarial model did not compensate for its higher task
-error or selective risk.
+Four PGD-arm tiles stayed gray with zero response gain (`layer2` channel73 and
+`layer4` channels491/418/61). These are unsuccessful fixed-start synthetic probes,
+not dead channels: the same channels have positive real-image responses. Their
+original choices/seeds are retained rather than retried for visual appeal.
 
-Read the [complete aggregate result page](docs/results.md), the
-[machine-readable values](docs/results.json), or the
-[self-contained visual explanation notebook](notebooks/oxford_pets_results_explained.ipynb).
-The notebook has no code cells: it embeds thirteen aggregate EDA, geometry, PCA, t-SNE,
-UMAP, and boundary figures and can be read directly on GitHub without running anything.
+## What the pictures mean
 
-## Reference protocol
+| View | Question it answers | What it cannot establish |
+|---|---|---|
+| First-layer kernels | What RGB/edge patterns are encoded by `conv1` weights? | That a channel detects a named object part |
+| Activation-maximization images | What synthetic input increases one selected channel's response? | A real example, a decoded memory, or a training-image reconstruction |
+| Top real calibration patches | Which clean images/locations strongly activate that channel? | Why the original training process learned it |
+| Activation maps and input-gradient sensitivity | Where does a channel respond, and where can small input changes affect it? | A causal or complete explanation |
+| Grad-CAM and occlusion | Where is the true-species logit localized, and how does masking change its margin over the other species? | Identical-score validation, guaranteed semantic understanding, or safety |
+| Randomized-weight control | Does an explanation change when learned weights are destroyed? | That a surviving explanation is correct |
+| Aggregate layer-response charts | How do responses change across depth, species, and input shift? | Superiority inferred from separately normalized pictures |
 
-- Keep the official test partition intact. Split official `trainval` within every
-  breed into deterministic 80% training and 20% calibration partitions.
-- Initialize both 37-class models from identical `IMAGENET1K_V1` tensors and an
-  identical new head. Train exactly 15 epochs at 224 px in float32 on MPS.
-- Standard uses clean cross-entropy. Adversarial uses random-start PGD-5 with
-  `epsilon=4/255` and `step=1/255`. Both arms share sample order, deterministic
-  augmentation, update count, and learning-rate schedule.
-- Evaluate FGSM and PGD-20 with five restarts on exactly 20 hash-selected test
-  samples per breed. Evaluate all registered corruptions on the full test partition.
-- Fit scalar temperature and a 90%-coverage threshold on clean calibration data only.
-- Treat PCA, t-SNE, and UMAP as explanatory views. Quantitative conclusions use the
-  original features and class-stratified bootstrap intervals.
+The low/mid/high views use `network.relu`, `network.layer2`, and `network.layer4`.
+Early channels often respond to colors or edges; deeper channels can combine larger
+patterns. Those are interpretive tendencies, not labels assigned to our channels.
+We do not claim an “eye”, “ear”, or “fur” detector without independent validation.
+Grad-CAM targets the true-species logit; occlusion targets the true-species-vs-other
+logit margin. These related diagnostics use distinct scalar objectives and keep the
+true target fixed even when a prediction is wrong. Agreement is not exact validation
+of the same scalar attribution.
+Late-layer theoretical receptive fields can exceed the whole 224-pixel input: a box
+is architectural support, not proof that every enclosed pixel was used equally.
 
-The complete repository-local protocol is [`docs/PROTOCOL.md`](docs/PROTOCOL.md), and
-the machine-readable copy is [`configs/experiment.yaml`](configs/experiment.yaml).
-The project README does not rely on private program files outside this checkout.
+The Lee et al. 2009 visualization is inspiration for the low-to-high feature
+walkthrough. This code uses a discriminative ResNet, not a convolutional deep belief
+network, and does not reproduce that paper's generative learning method.
 
-The YAML file is the source of truth, not a second table of hard-coded values in Python.
-You may edit epochs, batch sizes, attack settings, coverage, projection settings, and
-other valid experiment parameters. Every edit produces a different configuration hash,
-so checkpoints and computed results from another configuration are not reused silently.
-Changes to dataset splitting or model initialization require `setup` to be run again;
-ordinary training and evaluation parameter changes do not invalidate the registered data
-split. Commands never change a requested value automatically.
+## Protocol at a glance
 
-## Environment
+- Preserve the official test partition. Split official `trainval` 80/20 within each
+  of the 37 breeds using a recorded filename-hash seed; labels for learning are species.
+- Start both two-class ResNet-18 models from identical pinned ImageNet weights and
+  an identical new head. Fully fine-tune for the configured 15 epochs at 224 px,
+  float32, native PyTorch MPS, micro-batch 16 and two-step accumulation.
+- Standard training uses clean cross-entropy. The adversarial arm uses random-start
+  PGD-5 at `L∞ 4/255`, step `1/255`. Initialization, sample order, augmentation,
+  optimizer-update count, and schedule are matched.
+- Compare fixed final-epoch checkpoints. Evaluate clean accuracy, full-test
+  corruptions, and FGSM/PGD-20 with five restarts on 100 fixed test images per species.
+- Fit temperature and a 90%-coverage confidence policy using clean calibration only.
+- Select channels using clean calibration, not attractive test pictures. Inspect
+  fixed test anchors: two cats and two dogs. Compare both arms on the same images.
+- Save identities, logits, responses, explanation settings, timing, and hashes.
+  Separate quantitative observations from visual interpretation.
 
-The supported runtime is native ARM64 CPython 3.13.15. From this directory:
+All experiment parameters live in [the YAML configuration](configs/experiment.yaml).
+Valid parameters are editable: there are no duplicate hard-coded epoch or memory
+minimum gates. A changed configuration defines a new run identity; old checkpoints
+are not silently relabeled. Commands do not automatically downgrade requested settings.
+
+## Environment and commands
+
+Use native ARM64 CPython 3.13.15 on Apple Silicon:
 
 ```bash
 ./setup_venv.sh
 ```
 
-The setup script uses the standard-library `venv` module and pip with the fully pinned
-`requirements.txt`; uv is not used. To install from the ignored local wheel cache, use
-`./setup_venv.sh --offline`. Dataset files, weights, checkpoints, photographs, logits,
-features, per-sample arrays, and run manifests remain local and Git-ignored. The reviewed
-aggregate result page, result JSON, figures, reports, and visual notebook are shareable
-snapshots rather than substitutes for an independent reproduction.
-
-## Typed command interface
+This uses standard-library `venv`, pip, and the fully pinned `requirements.txt`, not
+uv. Use `./setup_venv.sh --offline` with an existing ignored wheel cache. Select this
+checkout's `.venv/bin/python` in the notebook's environment picker.
 
 ```text
 python src/cli.py setup      --config configs/experiment.yaml
 python src/cli.py preflight  --config configs/experiment.yaml --device mps
 python src/cli.py train      --config configs/experiment.yaml --arm standard|adversarial
 python src/cli.py evaluate   --config configs/experiment.yaml --device mps
-python src/cli.py represent  --config configs/experiment.yaml
+python src/cli.py represent  --config configs/experiment.yaml --device mps
 python src/cli.py report     --config configs/experiment.yaml
 python src/cli.py reproduce  --config configs/experiment.yaml --device mps
 ```
 
-Use `.venv/bin/python` in place of `python` unless the environment is activated.
-Every command accepts `--no-progress`. Training shows nested tqdm epoch and batch bars
-plus a durable epoch summary; setup, preflight, evaluation, representation analysis, and
-reporting print explicit stage status. Disabling progress changes only rendering, never
-the saved numerical evidence.
+Use `.venv/bin/python` unless the environment is activated. Every command accepts
+`--no-progress`; PyTorch training uses tqdm without changing the saved evidence.
+Silent MPS operation fallback is disabled. Memory is telemetry, not a minimum-memory
+gate; actual OOM, invalid attacks, non-finite values, and provenance errors stop a run
+and preserve diagnostics.
 
-`reproduce` reuses only artifacts whose recorded configuration, data, model, and
-initialization hashes match. It never silently reduces resolution, epochs, PGD steps,
-or restarts. Memory use is recorded as telemetry but does not block execution. MPS OOM,
-invalid attacks, and non-finite values still stop the run while preserving diagnostic state.
+## Notebook walkthrough
 
-## Guided notebook
-
-[`oxford_pets_adversarial_representations.ipynb`](notebooks/oxford_pets_adversarial_representations.ipynb)
-is the output-free guided interface over the same typed modules used by the CLI. It
-covers the question and claim boundary, configuration, environment, registered split,
-architecture, MPS preflight, both training arms, evaluation, representation analysis,
-reports, and the artifact inventory. It does not duplicate model, attack, or metric
-implementations inside notebook cells.
-
-Open it with this project's registered kernel:
+Open the [output-free guided notebook](notebooks/cat_dog_cnn_features.ipynb):
 
 ```bash
-.venv/bin/jupyter lab notebooks/oxford_pets_adversarial_representations.ipynb
+.venv/bin/jupyter lab notebooks/cat_dog_cnn_features.ipynb
 ```
 
-The setup cell rejects an interpreter outside this checkout's `.venv`.
-`RUN_FULL_EXPERIMENT = False` is the default, so preflight, training, attacks,
-representation fitting, and reporting are skipped during safe inspection. Change it to
-`True`, rerun the setup cell, and then run every cell in order only when intentionally
-starting the configured experiment.
+It covers species/breed EDA, model depth, matched training, attacks, channel selection,
+synthetic features, real receptive-field patches, activation maps, sensitivity,
+Grad-CAM, occlusion, sanity controls, quantitative charts, and report inventory.
+It calls the same modules as the CLI; it does not reimplement training in cells.
+After a matching public export, regenerating the guide also adds a compact static
+gallery of the workflow, both synthetic feature atlases, accuracy context, and selected
+kernels when available. Those repository-local Markdown images can be read on GitHub
+without execution; their configuration, kind, path, and asset hashes are checked first.
+They contain no real pet photographs. Use the builder's `--no-public-preview` option
+to omit this gallery; pending or stale evidence adds no gallery.
 
-For headless execution with the exact calling interpreter:
+`RUN_FULL_EXPERIMENT = False` is the default. Scientific stages are skipped in safe
+mode; available matching figures may be read from their saved manifest. Set the
+switch to `True` only to intentionally run the new study. A completed local notebook
+or picture-rich result companion contains pet photographs and stays ignored; it is
+not a public source notebook. A missing figure remains missing rather than borrowing
+an old breed result.
+
+For the completed local study, open `reports/generated/cat_dog_feature_results.ipynb`.
+It embeds all 32 saved figures, including real top patches, cat/dog channel walkthroughs,
+Grad-CAM and occlusion. It is entirely Markdown: no code cells, no execution required.
+The GitHub guide instead includes the six-image photograph-free static gallery.
 
 ```bash
-# Safe inspection; long scientific stages remain disabled.
-.venv/bin/python src/notebook_runner.py --config configs/experiment.yaml --device mps
+.venv/bin/jupyter lab reports/generated/cat_dog_feature_results.ipynb
+```
 
-# Explicitly enable preflight and the complete scientific pipeline.
+```bash
+# Regenerate the output-free source guide; no model execution.
+.venv/bin/python scripts/build_notebook.py
+
+# Explicit headless full run; leave out --full for safe inspection.
 .venv/bin/python src/notebook_runner.py --config configs/experiment.yaml --device mps --full
 ```
 
-The headless safe mode overrides an edited notebook switch. Executed copies and their
-manifests are saved under ignored local `artifacts/notebooks/`; the source notebook stays
-output-free. Regenerate the canonical guide after editing its builder with:
+`results/generated/feature_visualizations.json` records the current feature figure
+paths, arm results, limitations, configuration hash, and completion time. The guide
+loads those paths dynamically instead of assuming stale projection filenames.
+Before displaying a saved image, it verifies the recorded SHA-256; missing or altered
+images are explicitly marked stale and are not displayed.
 
-```bash
-.venv/bin/python scripts/build_notebook.py
-```
+## Evidence and sharing
 
-### Visual results companion
-
-After a matching experiment completes, `scripts/build_results_notebook.py` creates
-`notebooks/oxford_pets_results_explained.ipynb`: a read-only explanation with thirteen
-embedded aggregate figures. Three cover EDA and ten cover geometry, PCA, t-SNE, UMAP,
-and boundary views. The repository includes the reviewed 15-epoch snapshot; rebuilding it
-requires matching local evidence and does not run a model or an attack.
-
-```bash
-.venv/bin/python scripts/build_results_notebook.py --force
-```
-
-The builder verifies the configuration identity plus saved result, training, release,
-EDA, and figure hashes before embedding anything. Run it only after the notebook's report
-stage completes. EDA reads registered split metadata and source-image headers only. It
-includes no original pet photographs.
-
-The GitHub-facing aggregate page, JSON, selected figures, and tracked reports are also
-presentation-only exports from the same evidence:
-
-```bash
-.venv/bin/python scripts/build_public_results.py
-```
-
-## Evidence lifecycle
-
-`setup` records the official split and hashes. `preflight` runs data, attack, parity,
-gradient, BatchNorm, and determinism checks while recording memory telemetry. Each epoch
-checkpoint is written atomically and is resumable only after provenance validation.
-`evaluate` preserves aligned local logits/features; `represent` calculates geometry and
-creates projection figures; `report` produces the technical report, long-form report,
-Sunday draft, error taxonomy, and a hash-complete local release manifest.
-
-## Repository map
+Dataset files, ImageNet weights, checkpoints, photographs, per-sample arrays, execution
+logs/manifests, photo-containing figures, and rendered results notebooks remain local
+and ignored. Reviewed synthetic feature images and aggregate charts can be exported
+for a repository, with the protocol and checkpoint identity attached. Do not publish
+photo patches or overlays without a separate data-license/attribution review.
 
 ```text
-configs/          Locked machine-readable experiment settings
-docs/             Protocol, aggregate results, release handoff, and public-safe figures
-notebooks/        Guided experiment notebook and visual results companion
-scripts/          Deterministic notebook and results-presentation generators
-src/              Typed data, model, attack, training, evaluation, and reporting code
-tests/            Correctness, provenance, CLI, MPS, progress, and notebook gates
-reports/          Reviewed technical and long-form reports
-requirements.txt  Fully pinned Python 3.13 dependency environment
+configs/          Editable machine-readable protocol
+docs/             Protocol, handoff, public-safe aggregate/synthetic exports
+notebooks/        Output-free Cat/Dog feature walkthrough
+scripts/          Notebook and result-presentation builders; repository checks
+src/              Typed data, model, training, attacks, feature visualization, reports
+tests/            Correctness, provenance, MPS, progress, explanation, notebook gates
+reports/          Evidence-backed reports, or explicit pending state
+requirements.txt  Exact Python dependency pins
 setup_venv.sh     Isolated venv/pip setup and project kernel registration
 ```
 
-## Verification and GitHub handoff
+The README is self-contained and does not depend on private program files outside
+this checkout. The strongest eligible conclusion concerns this model pair's measured
+responses and finite digital-attack behavior, not physical robustness or safer animals.
+
+## Verification and release
 
 ```bash
 .venv/bin/python -m pytest -q -p no:cacheprovider
@@ -217,13 +204,6 @@ setup_venv.sh     Isolated venv/pip setup and project kernel registration
 .venv/bin/python scripts/check_repository.py
 ```
 
-The final command performs a read-only review of tracked and unignored candidate files:
-private absolute paths, common credential forms, oversized files, forbidden experiment
-binaries, notebook state, and local Markdown links. See the
-[GitHub handoff guide](docs/github.md) and [contribution guide](CONTRIBUTING.md).
-
-Original project code and documentation use the [MIT license](LICENSE). The Oxford-IIIT
-Pet data and downloaded model weights are not distributed; see
-[third-party notices](THIRD_PARTY_NOTICES.md). No remote is configured, and none of these
-commands creates a repository, pushes code, publishes a release, or authorizes a public
-claim.
+See [contribution guidance](CONTRIBUTING.md), [third-party notices](THIRD_PARTY_NOTICES.md),
+and the [local GitHub handoff](docs/github.md). Original code/documentation use
+the [MIT license](LICENSE). No command here creates a remote, pushes, or publishes.

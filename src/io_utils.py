@@ -107,7 +107,21 @@ def tree_hash(root: Path, include: Iterable[Path]) -> str:
 
 def source_hash(root: Path) -> str:
     suffixes = {".py", ".yaml", ".toml", ".md", ".in", ".txt", ".ipynb", ".sh"}
-    excluded = {".venv", ".git", "data", "weights", "checkpoints", "artifacts", "results"}
+    excluded = {
+        ".venv",
+        ".git",
+        ".local",
+        "data",
+        "weights",
+        "checkpoints",
+        "artifacts",
+        "results",
+        "generated",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+    }
     files = [
         path
         for path in root.rglob("*")

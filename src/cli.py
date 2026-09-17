@@ -24,14 +24,14 @@ Command = Literal["setup", "preflight", "train", "evaluate", "represent", "repor
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Oxford Pets adversarial representation experiment"
-    )
+    parser = argparse.ArgumentParser(description="Cat/dog CNN feature learning and localization")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("setup", "represent", "report"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--no-progress", action="store_true")
+        if name == "represent":
+            command.add_argument("--device", choices=("mps", "cpu"))
     for name in ("preflight", "evaluate", "reproduce"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
@@ -65,24 +65,28 @@ def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -
 
         return evaluate(config, require_device(cast(str, args.device)), progress=progress)
     if command == "represent":
-        from src.representations import represent
+        from src.feature_visualization import visualize_features
 
-        return represent(config, progress=progress)
+        return visualize_features(
+            config,
+            require_device(args.device or config.value("training", "device", str)),
+            progress=progress,
+        )
     if command == "report":
         from src.reporting import report
 
         return report(config, progress=progress)
     if command == "reproduce":
         from src.evaluation import evaluate
+        from src.feature_visualization import visualize_features
         from src.preflight import run_preflight
         from src.reporting import report
-        from src.representations import represent
         from src.setup_stage import setup_experiment
         from src.training import train_arm
 
         device = require_device(cast(str, args.device))
         stages: dict[str, object] = {}
-        status("Reproduce: starting the seven registered Week 3 stages...", enabled=progress)
+        status("Reproduce: starting the seven cat/dog feature-study stages...", enabled=progress)
         with tqdm(
             total=7, desc="reproduce stages", unit="stage", disable=not progress
         ) as stage_bar:
@@ -98,7 +102,7 @@ def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -
             stage_bar.update(1)
             stages["evaluate"] = evaluate(config, device, progress=progress)
             stage_bar.update(1)
-            stages["represent"] = represent(config, progress=progress)
+            stages["represent"] = visualize_features(config, device, progress=progress)
             stage_bar.update(1)
             stages["report"] = report(config, progress=progress)
             stage_bar.update(1)

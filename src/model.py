@@ -164,6 +164,8 @@ def initialization_manifest(config: ExperimentConfig) -> dict[str, Any]:
         "matched_rebuild_sha256": second_hash,
         "feature_dim": first.classifier.in_features,
         "classes": first.classifier.out_features,
+        "label_mode": config.label_mode,
+        "target_names": ["cat", "dog"] if config.label_mode == "species" else None,
     }
     atomic_write_json(config.project_path("artifacts") / "model" / "initialization.json", manifest)
     return manifest
