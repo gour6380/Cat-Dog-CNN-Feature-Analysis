@@ -37,6 +37,9 @@ clean-only epochs followed by balanced, equally mixed clean/PGD training. It use
 a training-derived validation holdout and its own checkpoints, charts and read-only
 results notebook. The original failed comparison above is preserved. Pilot results
 are exploratory, not an independent or exactly matched robustness confirmation.
+The completed pilot reaches **85.06% clean accuracy but only 2.5% PGD-20×5
+accuracy** (cat/dog attacked recall0%/5%). It restores some clean cat recognition,
+not useful robustness; it is not a replacement for the standard-model walkthrough.
 
 ![Low/mid/high synthetic channel preferences](docs/assets/standard-activation_maximization-standard-synthetic-atlas.png)
 

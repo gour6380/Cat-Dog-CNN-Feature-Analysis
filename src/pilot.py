@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -76,7 +77,12 @@ def run_pilot(
         stages["setup"] = setup_experiment(config, progress=progress)
         bar.update(1)
         protocol = prepare_pilot_protocol(config)
-        stages["training_protocol"] = {"sha256": protocol.sha256, "manifest": protocol.manifest}
+        stages["training_protocol"] = {
+            "sha256": protocol.sha256,
+            "manifest": str(config.project_path("artifacts") / "training/validation-split.json"),
+            "counts": protocol.manifest["counts"],
+            "species_weights": protocol.manifest["species_weights"],
+        }
         bar.update(1)
         stages["preflight"] = run_preflight(config, device, progress=progress)
         bar.update(1)
@@ -97,5 +103,26 @@ def run_pilot(
         "baseline_hashes": preserved_after,
         "public_actions": "none",
     }
-    atomic_write_json(config.project_path("artifacts") / "pilot-run.json", result)
-    return result
+    destination = config.project_path("artifacts") / "pilot-run.json"
+    atomic_write_json(destination, result)
+    return pilot_summary(result, destination)
+
+
+def pilot_summary(result: dict[str, Any], destination: Path) -> dict[str, Any]:
+    """Keep terminal output compact; complete machine evidence lives in manifests."""
+
+    stages = result["stages"]
+    metrics = stages["evaluate"]["arms"]["adversarial"]
+    return {
+        "status": result["status"],
+        "config_sha256": result["config_sha256"],
+        "exploratory": True,
+        "baseline_preserved": result["baseline_preserved"],
+        "training": stages["train_adversarial"],
+        "clean_accuracy": metrics["full_test"]["clean"]["accuracy"],
+        "clean_species_recalls": metrics["full_test"]["clean"]["per_class_accuracy"],
+        "pgd": metrics["attack_subset"]["pgd"],
+        "report": stages["report"],
+        "run_manifest": str(destination),
+        "public_actions": "none",
+    }

@@ -5,6 +5,45 @@ of its failed PGD arm. The original experiment and illustrated results remain
 available with their original configuration and checkpoint identities. Its source
 snapshot is local commit `9aa7f2ac49cd938d377db7bb66aae6ee58246338`.
 
+## Completed result: not a successful robust model
+
+Fixed epoch 15 completed on native MPS with 1,245 updates. Training plus all
+per-epoch validation took 2,240.31 seconds; final evaluation took 311.90 seconds
+(machine runtime, not a focused-hours claim).
+
+| Measure | Failed original PGD arm | Exploratory pilot |
+|---|---:|---:|
+| Clean test accuracy | 67.76% | 85.06% (3,121/3,669) |
+| Clean cat / dog recall | 0% / 100% | 53.68% / 100% |
+| FGSM accuracy, paired subset | 50% | 49.5% (99/200) |
+| PGD-20×5 accuracy, paired subset | 50% | 2.5% (5/200) |
+| PGD cat / dog recall | 0% / 100% | 0% / 5% |
+
+The original arm's nominal 50% attacked score was an all-dog decision rule, not
+useful robustness. The pilot restores some clean cat recognition, but misses
+548/1,183 clean cats and every attacked cat in the fixed 100-cat subset. Strong
+PGD defeats 154 of its 159 clean-correct paired samples (96.86%). This is a
+**negative strong-attack result**, not an accuracy-improvement success to present
+as robust recognition. Keep the original standard model (99.37% clean) as the
+main learned-feature walkthrough; do not replace it with this pilot.
+
+Clean validation was volatile during mixed training. Final validation was
+261/295 clean and 3/64 PGD-correct. All 15 epochs are retained; no earlier
+checkpoint was substituted. Changing warm-up, mixing, weighting, fitting budget
+and BatchNorm exposure together prevents attributing the result to one mechanism.
+
+The clean-calibration policy achieves 90.24% test coverage with 11.45% selective
+risk. Under blur sigma1.5, coverage becomes 95.42% and selective risk25.85%; the
+confidence operating point does not stay fixed after shift. These are empirical
+diagnostics, not a safety guarantee.
+
+Evidence: config `a6a9b7a0…3bdedd`, dataset `a5373179…b4f3f`, initialization
+`1ca4bb60…3fdd`, training protocol `a52f6c40…813df`, scientific source
+`2fee7c7a…e7782`, checkpoint `a332c9c9…cc25f`, evaluation `2b3edde5…6fcd6`.
+The local read-only report/notebook and full JSON comparison are listed below.
+No original outputs were overwritten; no additional rescue run, architecture,
+public repository, push or publication was performed.
+
 ## Registered recipe
 
 Before fitting, register the exact [pilot configuration](../configs/pgd_pilot.yaml)
@@ -63,6 +102,15 @@ automatic protocol downgrade.
 ## Run and inspect
 
 Use the existing Python 3.13.15 environment and `requirements.txt` (venv/pip, no uv):
+
+This frozen comparison command is for the current completed local study: it needs
+the original ignored checkpoints, evaluation arrays, release inventory and
+`baseline-preservation.json` receipt. A fresh Git clone does not contain these
+private artifacts and cannot reproduce this exact saved comparison by running the
+command alone. To register a different fresh comparison, first complete the
+original pipeline, preserve its own measured identities, and register a new pilot
+configuration/receipt with those identities. Do not relabel new outcomes as this
+pilot or bypass the preservation checks.
 
 ```bash
 .venv/bin/python src/cli.py pilot --config configs/pgd_pilot.yaml --device mps

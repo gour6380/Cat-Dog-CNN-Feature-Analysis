@@ -10,7 +10,7 @@ from src.cli import _parser
 from src.config import ConfigError, ExperimentConfig, load_config
 from src.evaluation import EvaluationError, evaluate
 from src.io_utils import atomic_write_json, sha256_file
-from src.pilot import assert_pilot_isolated, verify_preserved_baseline
+from src.pilot import assert_pilot_isolated, pilot_summary, verify_preserved_baseline
 
 ROOT = Path(__file__).parents[1]
 
@@ -58,3 +58,36 @@ def test_evaluation_rejects_empty_or_duplicate_arm_selection(tmp_path: Path) -> 
     for arms in ((), ("adversarial", "adversarial")):
         with pytest.raises(EvaluationError, match="unique"):
             evaluate(isolated, torch.device("cpu"), progress=False, arms=arms)
+
+
+def test_pilot_terminal_summary_omits_sample_manifest_and_full_shift_matrix() -> None:
+    result = {
+        "status": "complete",
+        "config_sha256": "pilot",
+        "baseline_preserved": True,
+        "stages": {
+            "training_protocol": {"manifest": {"fit_ids": ["private-sample-id"]}},
+            "train_adversarial": {"epochs": 15},
+            "report": {"notebook": "saved-results.ipynb"},
+            "evaluate": {
+                "arms": {
+                    "adversarial": {
+                        "full_test": {
+                            "clean": {
+                                "accuracy": 0.85,
+                                "per_class_accuracy": {"0": 0.54, "1": 1.0},
+                            },
+                            "blur": {"accuracy": 0.5},
+                        },
+                        "attack_subset": {"pgd": {"robust_accuracy": 0.025}},
+                    }
+                }
+            },
+        },
+    }
+    summary = pilot_summary(result, Path("pilot-run.json"))
+    assert summary["clean_accuracy"] == 0.85
+    assert summary["pgd"]["robust_accuracy"] == 0.025
+    assert "private-sample-id" not in str(summary)
+    assert "blur" not in str(summary)
+    assert summary["run_manifest"] == "pilot-run.json"
