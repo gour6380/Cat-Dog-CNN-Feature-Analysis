@@ -274,6 +274,86 @@ def run_preflight(
         if gradient_count == 0:
             raise SafetyStop("MPS preflight produced no parameter gradients")
         actual_linf = float((attack.adversarial - pixels_mps).abs().amax().item())
+        pilot_probe: dict[str, Any] | None = None
+        from src.pilot_protocol import (
+            pilot_enabled,
+            pilot_training_loss,
+            prepare_pilot_protocol,
+        )
+
+        if pilot_enabled(config):
+            from src.training import _assert_finite_gradients, _optimizer
+
+            protocol = prepare_pilot_protocol(config, splits)
+            half = config.integer("training", "micro_batch_size") // 2
+            selected = [record for record in protocol.fit_records if record.label == 0][:half]
+            selected += [record for record in protocol.fit_records if record.label == 1][
+                : config.integer("training", "micro_batch_size") - half
+            ]
+            probe_data = PetRecordDataset(selected, config, training=True, epoch=4)
+            pilot_pixels = torch.stack([probe_data[index][0] for index in range(len(selected))])
+            pilot_pixels = pilot_pixels.to(device=device, dtype=torch.float32)
+            pilot_labels = torch.tensor(
+                [record.label for record in selected], device=device, dtype=torch.long
+            )
+            pilot_ids = [record.sample_id for record in selected]
+            spec = AttackSpec(
+                config.number("attack", "epsilon"),
+                config.number("attack", "step_size"),
+                config.integer("attack", "train_steps"),
+                bool(config.section("attack").get("random_start")),
+                1,
+                config.integer("training", "attack_seed"),
+            )
+            probe_optimizer = _optimizer(mps_model, config)
+            probe_optimizer.zero_grad(set_to_none=True)
+            accumulation = config.integer("training", "gradient_accumulation_steps")
+            status(
+                "Preflight: probing mixed loss with AdamW state at full micro-batch.",
+                enabled=progress,
+            )
+            for _ in range(accumulation):
+                probe_loss, clean_loss, adversarial_loss = pilot_training_loss(
+                    mps_model,
+                    pilot_pixels,
+                    pilot_labels,
+                    pilot_ids,
+                    config.integer("pilot", "clean_warmup_epochs") + 1,
+                    spec,
+                    protocol,
+                    config,
+                )
+                ensure_finite("pilot mixed preflight loss", probe_loss)
+                (probe_loss / accumulation).backward()  # type: ignore[no-untyped-call]
+                _assert_finite_gradients(mps_model)
+            probe_optimizer.step()
+            probe_optimizer.zero_grad(set_to_none=True)
+            # A second backward includes materialized AdamW moments in the peak probe.
+            probe_loss, clean_loss, adversarial_loss = pilot_training_loss(
+                mps_model,
+                pilot_pixels,
+                pilot_labels,
+                pilot_ids,
+                config.integer("pilot", "clean_warmup_epochs") + 1,
+                spec,
+                protocol,
+                config,
+            )
+            ensure_finite("pilot mixed preflight loss with optimizer state", probe_loss)
+            probe_loss.backward()  # type: ignore[no-untyped-call]
+            probe_gradient_norm = _assert_finite_gradients(mps_model)
+            pilot_probe = {
+                "status": "passed",
+                "micro_batch_size": len(selected),
+                "accumulation": accumulation,
+                "adamw_state_materialized": bool(probe_optimizer.state),
+                "mixed_loss": float(probe_loss.detach().item()),
+                "gradient_norm": probe_gradient_norm,
+                "protocol_sha256": protocol.sha256,
+                "memory": memory_snapshot(device),
+            }
+            del probe_loss, clean_loss, adversarial_loss, probe_optimizer
+            del pilot_pixels, pilot_labels
         synchronize(device)
         peak_memory = memory_snapshot(device)
         del mps_model, attack, pixels_mps, labels_mps, logits, loss
@@ -333,6 +413,8 @@ def run_preflight(
             },
             "elapsed_seconds": time.perf_counter() - started,
         }
+        if pilot_probe is not None:
+            result["pilot_mixed_loss_probe"] = pilot_probe
         atomic_write_json(config.project_path("artifacts") / "preflight.json", result)
         status("Preflight passed: the configured experiment may train.", enabled=progress)
         return result

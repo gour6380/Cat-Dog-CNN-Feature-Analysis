@@ -288,11 +288,21 @@ def _policy_from_calibration(
 
 
 def evaluate(
-    config: ExperimentConfig, device: torch.device, *, progress: bool = True
+    config: ExperimentConfig,
+    device: torch.device,
+    *,
+    progress: bool = True,
+    arms: tuple[Arm, ...] = ("standard", "adversarial"),
 ) -> dict[str, Any]:
     failure = config.project_path("artifacts") / "failures" / "evaluate.json"
     started = time.perf_counter()
     try:
+        if (
+            not arms
+            or len(set(arms)) != len(arms)
+            or any(arm not in {"standard", "adversarial"} for arm in arms)
+        ):
+            raise EvaluationError("evaluation arms must be nonempty, unique and supported")
         epochs = config.integer("training", "epochs")
         attack_steps = config.integer("attack", "evaluation_steps")
         attack_restarts = config.integer("attack", "evaluation_restarts")
@@ -321,9 +331,8 @@ def evaluate(
                 "samples_per_class": attack_per_class,
             },
         }
-        arm_names: tuple[Arm, Arm] = ("standard", "adversarial")
         for arm in tqdm(
-            arm_names,
+            arms,
             desc="evaluation arms",
             unit="arm",
             disable=not progress,

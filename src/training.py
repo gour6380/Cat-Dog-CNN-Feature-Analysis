@@ -18,6 +18,14 @@ from src.config import ExperimentConfig
 from src.data import build_loader, epoch_order, load_registered_splits
 from src.io_utils import atomic_write_json, canonical_json_bytes, sha256_bytes, utc_now
 from src.model import NormalizedResNet18, atomic_torch_save, build_model, state_dict_hash
+from src.pilot_protocol import (
+    collect_pilot_validation,
+    pilot_enabled,
+    pilot_phase,
+    pilot_training_loss,
+    prepare_pilot_protocol,
+    register_pilot_training_source,
+)
 from src.progress import status, tqdm
 from src.runtime import (
     SafetyStop,
@@ -52,22 +60,28 @@ def experiment_provenance(config: ExperimentConfig) -> dict[str, str]:
     initialization_hash = initialization.get("state_sha256")
     if not all(isinstance(value, str) for value in (dataset_hash, split_hash, initialization_hash)):
         raise ResumeError("provenance manifests do not contain required hashes")
-    combined = sha256_bytes(
-        canonical_json_bytes(
-            {
-                "config": config.sha256,
-                "dataset": dataset_hash,
-                "split": split_hash,
-                "initialization": initialization_hash,
-            }
-        )
-    )
+    combined_fields = {
+        "config": config.sha256,
+        "dataset": dataset_hash,
+        "split": split_hash,
+        "initialization": initialization_hash,
+    }
+    optional_fields: dict[str, str] = {}
+    if pilot_enabled(config):
+        protocol = prepare_pilot_protocol(config)
+        combined_fields["pilot_protocol"] = protocol.sha256
+        optional_fields["pilot_protocol_sha256"] = protocol.sha256
+        source_fingerprint = register_pilot_training_source(config)
+        combined_fields["pilot_training_source"] = source_fingerprint
+        optional_fields["pilot_training_source_sha256"] = source_fingerprint
+    combined = sha256_bytes(canonical_json_bytes(combined_fields))
     return {
         "config_sha256": config.sha256,
         "dataset_sha256": cast(str, dataset_hash),
         "split_sha256": cast(str, split_hash),
         "initialization_sha256": cast(str, initialization_hash),
         "combined_sha256": combined,
+        **optional_fields,
     }
 
 
@@ -211,6 +225,12 @@ def train_arm(
         start_memory = memory_snapshot(device)
         splits = load_registered_splits(config)
         training_records = splits["training"]
+        protocol = None
+        if pilot_enabled(config):
+            if arm != "adversarial":
+                raise ValueError("the exploratory pilot trains only the adversarial arm")
+            protocol = prepare_pilot_protocol(config, splits)
+            training_records = protocol.fit_records
         model = build_model(config).to(device=device, dtype=torch.float32)
         initialization_hash = state_dict_hash(model.state_dict())
         provenance = experiment_provenance(config)
@@ -283,6 +303,8 @@ def train_arm(
                 model.train()
                 optimizer.zero_grad(set_to_none=True)
                 running_loss = 0.0
+                running_clean_loss = 0.0
+                running_adversarial_loss = 0.0
                 sample_count = 0
                 last_gradient_norm = 0.0
                 last_lrs = base_lrs
@@ -299,14 +321,33 @@ def train_arm(
                         sample_ids = list(sample_ids_raw)
                         pixels = pixels.to(device=device, dtype=torch.float32)
                         labels = labels.to(device=device, dtype=torch.long)
-                        if arm == "adversarial":
-                            attack_ids = [f"{sample_id}:epoch:{epoch}" for sample_id in sample_ids]
-                            pixels = pgd_attack(
-                                model, pixels, labels, attack_ids, attack_spec
-                            ).adversarial
-                        logits = model(pixels)
-                        ensure_finite("training logits", logits)
-                        loss = nnf.cross_entropy(logits, labels)
+                        if protocol is not None:
+                            loss, clean_loss, adversarial_loss = pilot_training_loss(
+                                model,
+                                pixels,
+                                labels,
+                                sample_ids,
+                                epoch,
+                                attack_spec,
+                                protocol,
+                                config,
+                            )
+                            running_clean_loss += float(clean_loss.detach().item()) * len(labels)
+                            if adversarial_loss is not None:
+                                running_adversarial_loss += float(
+                                    adversarial_loss.detach().item()
+                                ) * len(labels)
+                        else:
+                            if arm == "adversarial":
+                                attack_ids = [
+                                    f"{sample_id}:epoch:{epoch}" for sample_id in sample_ids
+                                ]
+                                pixels = pgd_attack(
+                                    model, pixels, labels, attack_ids, attack_spec
+                                ).adversarial
+                            logits = model(pixels)
+                            ensure_finite("training logits", logits)
+                            loss = nnf.cross_entropy(logits, labels)
                         ensure_finite("training loss", loss)
                         window_size = accumulation_window_size(
                             batch_index, batches_per_epoch, accumulation
@@ -331,7 +372,7 @@ def train_arm(
                     raise SafetyStop("optimizer-update count diverged from registered schedule")
                 synchronize(device)
                 mean_loss = running_loss / sample_count
-                epoch_record = {
+                epoch_record: dict[str, Any] = {
                     "epoch": epoch,
                     "mean_training_loss": mean_loss,
                     "sample_count": sample_count,
@@ -342,6 +383,40 @@ def train_arm(
                     "seconds": time.perf_counter() - epoch_started,
                     "memory": memory_snapshot(device),
                 }
+                if protocol is not None:
+                    phase = pilot_phase(config, epoch)
+                    epoch_record.update(
+                        {
+                            "pilot_phase": phase,
+                            "clean_loss_weight": (
+                                1.0
+                                if phase == "clean_warmup"
+                                else config.number("pilot", "clean_loss_weight")
+                            ),
+                            "mean_clean_training_loss": running_clean_loss / sample_count,
+                            "mean_adversarial_training_loss": (
+                                None
+                                if phase == "clean_warmup"
+                                else running_adversarial_loss / sample_count
+                            ),
+                        }
+                    )
+                    status(
+                        f"pilot — epoch {epoch}/{epochs}: monitoring held-out training validation "
+                        "(no checkpoint selection)",
+                        enabled=progress,
+                    )
+                    epoch_record["validation"] = collect_pilot_validation(
+                        model,
+                        protocol,
+                        config,
+                        device,
+                        epoch,
+                        progress=progress,
+                    )
+                    synchronize(device)
+                    epoch_record["seconds"] = time.perf_counter() - epoch_started
+                    epoch_record["memory"] = memory_snapshot(device)
                 history.append(epoch_record)
                 checkpoint = {
                     "schema_version": 1,
@@ -371,6 +446,11 @@ def train_arm(
                         "elapsed_this_invocation_seconds": time.perf_counter() - started,
                         "start_memory": start_memory,
                         "current_memory": memory_snapshot(device),
+                        **(
+                            {"pilot_protocol_sha256": protocol.sha256}
+                            if protocol is not None
+                            else {}
+                        ),
                     },
                 )
                 epoch_bar.set_postfix(loss=f"{mean_loss:.4f}", updates=completed_updates)
@@ -380,6 +460,15 @@ def train_arm(
                     f"updates={completed_updates}, seconds={epoch_record['seconds']:.1f}.",
                     enabled=progress,
                 )
+                if protocol is not None:
+                    clean_recalls = epoch_record["validation"]["clean"]["per_class_accuracy"]
+                    pgd_recalls = epoch_record["validation"]["pgd"]["per_class_accuracy"]
+                    status(
+                        "pilot validation — clean cat/dog recall="
+                        f"{clean_recalls['0']:.1%}/{clean_recalls['1']:.1%}; "
+                        f"PGD cat/dog recall={pgd_recalls['0']:.1%}/{pgd_recalls['1']:.1%}.",
+                        enabled=progress,
+                    )
         standard_orders = [item["order_sha256"] for item in history]
         order_protocol_hash = sha256_bytes(canonical_json_bytes(standard_orders))
         result = {

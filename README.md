@@ -32,6 +32,12 @@ PGD arm retained as a cautionary comparison.
 [Technical report](reports/technical_report.md) ·
 [Long-form explanation](reports/long_form_report.md)
 
+A separate owner-approved [PGD stabilization pilot](docs/PGD_PILOT.md) tests three
+clean-only epochs followed by balanced, equally mixed clean/PGD training. It uses
+a training-derived validation holdout and its own checkpoints, charts and read-only
+results notebook. The original failed comparison above is preserved. Pilot results
+are exploratory, not an independent or exactly matched robustness confirmation.
+
 ![Low/mid/high synthetic channel preferences](docs/assets/standard-activation_maximization-standard-synthetic-atlas.png)
 
 These are optimized channel preferences, not recovered photographs or verified

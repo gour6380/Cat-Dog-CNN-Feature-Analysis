@@ -20,7 +20,9 @@ from src.io_utils import atomic_write_json, utc_now
 from src.progress import status, tqdm
 from src.runtime import record_failure, require_device
 
-Command = Literal["setup", "preflight", "train", "evaluate", "represent", "report", "reproduce"]
+Command = Literal[
+    "setup", "preflight", "train", "evaluate", "represent", "report", "reproduce", "pilot"
+]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,7 +34,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--no-progress", action="store_true")
         if name == "represent":
             command.add_argument("--device", choices=("mps", "cpu"))
-    for name in ("preflight", "evaluate", "reproduce"):
+    for name in ("preflight", "evaluate", "reproduce", "pilot"):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--device", required=True, choices=("mps", "cpu"))
@@ -45,7 +47,18 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -> object:
+    from src.pilot_protocol import pilot_enabled
+
     progress = not bool(args.no_progress)
+    is_pilot = pilot_enabled(config)
+    if is_pilot:
+        from src.pilot import assert_pilot_isolated
+
+        assert_pilot_isolated(config)
+    if command == "pilot" or (command == "reproduce" and is_pilot):
+        from src.pilot import run_pilot
+
+        return run_pilot(config, require_device(cast(str, args.device)), progress=progress)
     if command == "setup":
         from src.setup_stage import setup_experiment
 
@@ -63,8 +76,15 @@ def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -
     if command == "evaluate":
         from src.evaluation import evaluate
 
-        return evaluate(config, require_device(cast(str, args.device)), progress=progress)
+        return evaluate(
+            config,
+            require_device(cast(str, args.device)),
+            progress=progress,
+            arms=("adversarial",) if is_pilot else ("standard", "adversarial"),
+        )
     if command == "represent":
+        if is_pilot:
+            raise ValueError("pilot has no matched standard arm; use its separate report charts")
         from src.feature_visualization import visualize_features
 
         return visualize_features(
@@ -73,6 +93,10 @@ def _run(command: Command, config: ExperimentConfig, args: argparse.Namespace) -
             progress=progress,
         )
     if command == "report":
+        if is_pilot:
+            from src.pilot_reporting import report_pilot
+
+            return report_pilot(config, progress=progress)
         from src.reporting import report
 
         return report(config, progress=progress)
