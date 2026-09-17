@@ -355,10 +355,11 @@ def _figures(
             axis.set(title=f"{title}\nn={rows[0]['metrics'][condition]['count']}", ylim=(0, 112))
             axis.grid(axis="y", alpha=0.2)
         axes[0].set_ylabel("Accuracy / true-species recall (%)")
-        axes[1].legend(loc="lower center", ncol=3, fontsize=9)
+        axes[1].legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=3, fontsize=9)
         figure.suptitle(
             "Different fitting recipes and budgets: descriptive, not causal comparison", fontsize=11
         )
+        figure.tight_layout(rect=(0, 0, 1, 0.94))
         figures.append(_save_figure(config, "original-vs-pilot", figure))
         plt.close(figure)
 
@@ -664,6 +665,7 @@ def report_pilot(config: ExperimentConfig, *, progress: bool = True) -> dict[str
     atomic_write_json(notebook_path, _notebook(text, config, figures))
     data_manifest_path = config.project_path("artifacts") / "data/manifest.json"
     initialization_path = config.project_path("artifacts") / "model/initialization.json"
+    training_source_path = config.project_path("artifacts") / "training/source.json"
     manifest_paths = [
         config.path,
         evaluation_path,
@@ -678,6 +680,8 @@ def report_pilot(config: ExperimentConfig, *, progress: bool = True) -> dict[str
         original_path,
         *(config.root / item["path"] for item in figures),
     ]
+    if training_source_path.is_file():
+        manifest_paths.append(training_source_path)
     receipt = {
         "schema_version": 1,
         "created_at": utc_now(),
@@ -692,6 +696,7 @@ def report_pilot(config: ExperimentConfig, *, progress: bool = True) -> dict[str
         "pilot_protocol_sha256": protocol["pilot_protocol_sha256"],
         "data_manifest": _load(data_manifest_path),
         "initialization": _load(initialization_path),
+        "training_source": _load(training_source_path) if training_source_path.is_file() else None,
         "source_sha256": source_hash(config.root),
         "git": git_state(config.root),
         "environment": environment_snapshot(),
