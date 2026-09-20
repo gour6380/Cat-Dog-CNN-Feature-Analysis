@@ -136,6 +136,7 @@ def test_channel_accumulation_transfers_to_cpu_before_float64_cast() -> None:
     assert all(channels == [1, 2, 0] for channels in selected.values())
 
 
+@pytest.mark.mps
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="native MPS unavailable")
 def test_small_float32_mps_ranking_matches_cpu_and_preserves_model_state() -> None:
     cpu_model = _model()

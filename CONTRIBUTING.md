@@ -10,14 +10,17 @@ Use the project's CPython 3.13.15 environment, PyTorch/MPS and pinned requiremen
 
 ```bash
 ./setup_venv.sh
-.venv/bin/python -m pytest -q -p no:cacheprovider
+.venv/bin/python -m pytest -q -p no:cacheprovider -m "not mps"
+PYTORCH_ENABLE_MPS_FALLBACK=0 .venv/bin/python -m pytest -q -p no:cacheprovider -m mps
 .venv/bin/python -m ruff check .
 .venv/bin/python -m ruff format --check .
 .venv/bin/python -m mypy src
 .venv/bin/python scripts/check_repository.py
 ```
 
-Tests must use bounded synthetic inputs. Do not launch full training, download
+The first pytest command matches hosted CPU CI. The marked MPS smoke test runs locally
+on Apple silicon because hosted macOS MPS availability does not guarantee usable Metal
+memory. Tests must use bounded synthetic inputs. Do not launch full training, download
 datasets or restore checkpoints as a test/documentation side effect.
 
 ## Protocol changes

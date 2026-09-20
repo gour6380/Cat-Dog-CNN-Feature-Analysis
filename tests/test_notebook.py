@@ -416,11 +416,15 @@ def test_report_cell_has_no_evaluation_prerequisite(full: bool) -> None:
     assert calls == [("report", full), ("display-report", True)]
 
 
-def test_readme_project_links_are_repository_local_and_resolve() -> None:
+def test_readme_project_links_are_canonical_or_repository_local_and_resolve() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     targets = re.findall(r"\[[^]]+\]\(([^)]+)\)", readme)
+    repository_url = "https://github.com/gour6380/Cat-Dog-CNN-Feature-Analysis"
     assert targets
+    assert targets.count(repository_url) == 1
     for target in targets:
+        if target == repository_url:
+            continue
         assert "://" not in target and not target.startswith(("/", ".."))
         assert (ROOT / target.split("#", maxsplit=1)[0]).exists(), target
     assert "Instructions/checklist.md" not in readme and "/Users/" not in readme

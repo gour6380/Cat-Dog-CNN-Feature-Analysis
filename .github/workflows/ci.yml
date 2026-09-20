@@ -32,6 +32,6 @@ jobs:
       - name: Type check
         run: python -m mypy src
       - name: Synthetic CPU tests
-        run: python -m pytest -q -p no:cacheprovider
+        run: python -m pytest -q -p no:cacheprovider -m "not mps"
       - name: Release-candidate audit
         run: python scripts/check_repository.py

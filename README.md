@@ -180,11 +180,18 @@ or provenance failures stop the run; settings are not silently downgraded.
 ## Verify changes
 
 ```bash
-.venv/bin/python -m pytest -q -p no:cacheprovider
+# Hosted-CI-equivalent bounded CPU suite
+.venv/bin/python -m pytest -q -p no:cacheprovider -m "not mps"
+
+# Local Apple-silicon smoke test; silent fallback stays disabled
+PYTORCH_ENABLE_MPS_FALLBACK=0 .venv/bin/python -m pytest -q -p no:cacheprovider -m mps
+
 .venv/bin/python -m ruff check .
 .venv/bin/python -m mypy src
 .venv/bin/python scripts/check_repository.py
 ```
 
-Development tests use bounded synthetic inputs; they do not launch full training.
+GitHub Actions runs the bounded CPU suite because hosted macOS MPS availability does
+not guarantee a usable Metal allocation. The marked MPS smoke test remains a required
+local Apple-silicon check. Development tests do not launch full training.
 Methods and interpretation boundaries are in the [protocol](docs/PROTOCOL.md).
