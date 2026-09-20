@@ -1,5 +1,7 @@
 # Cat/Dog CNN Features: What Responds, and Where?
 
+**Repository:** [gour6380/Cat-Dog-CNN-Feature-Analysis](https://github.com/gour6380/Cat-Dog-CNN-Feature-Analysis)
+
 [Guided notebook](notebooks/cat_dog_cnn_features.ipynb) ·
 [Protocol](docs/PROTOCOL.md) · [Configuration](configs/experiment.yaml) ·
 [Results](docs/results.md) · [Technical report](reports/technical_report.md) ·
