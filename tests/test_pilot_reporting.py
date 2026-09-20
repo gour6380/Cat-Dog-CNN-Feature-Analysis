@@ -55,6 +55,9 @@ def _arm(clean_predictions: list[int], pgd_predictions: list[int]) -> dict[str, 
 def _fixture(tmp_path: Path) -> ExperimentConfig:
     base = load_config(ROOT / "configs/experiment.yaml")
     raw = deepcopy(base.raw)
+    # This historical pilot fixture has its own fixed 15-epoch evidence;
+    # it must not inherit the owner's editable main-run epoch count.
+    raw["training"]["epochs"] = 15
     for key, value in {
         "artifacts": "artifacts/pilots/test",
         "results": "results/generated/pilots/test",

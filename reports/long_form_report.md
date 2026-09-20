@@ -1,66 +1,102 @@
-# Seeing what a cat/dog CNN responds to
+# When 67.8% accuracy means the model learned one answer
 
-## Clean species predictions and failure status
+Feature visualization is tempting because it turns a neural network into something we
+can see. Early filters resemble edge or color detectors. Middle channels respond to
+textures and repeated shapes. Later maps appear to highlight meaningful regions. But
+those images become easy to overinterpret when the classifier underneath them is not
+checked first.
 
-> adversarial arm — WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.
+This experiment trained two matched ResNet-18 Cat/Dog classifiers on Oxford-IIIT Pet.
+Both started from the same ImageNet weights and binary head, saw the same fitting
+records in the same order, and received 1,245 optimizer updates across 15 epochs. The
+standard arm optimized clean cross-entropy. The second arm optimized only PGD-5 inputs
+within an L∞ radius of `4/255`.
 
-| Arm | True cats | True dogs | Predicted cats | Predicted dogs | Cat recall | Dog recall | Macro accuracy | Clean-test status |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| standard | 1183 | 2486 | 1186 | 2483 | 99.15% | 99.48% | 99.32% | Both species predicted; robustness not inferred |
-| adversarial | 1183 | 2486 | 0 | 3669 | 0.00% | 100.00% | 50.00% | FAILED comparison: single-species prediction |
+The goal was to compare what their low-, middle- and high-level channels preferred and
+where those channels responded. The more important result arrived before the feature
+gallery.
 
-A single-species arm is retained as a failed comparison, not useful robust cat/dog recognition. Its channel and attribution pictures are failure diagnostics. Hidden features may remain variable even when all observed clean decisions select one species; the cause of the classifier failure remains unproven.
+## A plausible number hid a complete failure
 
+The standard checkpoint classified 294 of 295 held-out validation images correctly:
+99.66% overall and 99.75% macro accuracy. The PGD checkpoint classified 200 correctly,
+or 67.80%.
 
-Two ImageNet-initialized ResNet-18 models were fine-tuned for a binary cat-versus-dog task from the
-official Oxford-IIIT Pet dataset. Matched initialization, image order, crops, and optimizer
-updates isolate clean versus PGD-5 training.
+That second number could look respectable without context. The validation partition,
+however, contains 95 cats and 200 dogs. The PGD model predicted **dog for all 295
+images**. Cat recall was 0%, dog recall was 100%, and macro accuracy was exactly 50%.
+Its overall accuracy simply reproduced the majority-class proportion.
 
-The feature story is now visual and layer-by-layer: kernel weights in the first layer,
-synthetic activation-maximization stimuli, actual-image activation maps, and receptive-field
-crops for selected channels. Channels are selected using calibration responses so the
-test images are explanations, not a mechanism for cherry-picking the selection.
+The same pattern appears in fitting: all 855 cats were labeled dog and all 1,794 dogs
+were labeled dog. The final attacked-training accuracy, 67.72%, exactly equals the dog
+share. Its loss was also close to the entropy of that class prior. Under this recipe,
+the model had converged to a shortcut rather than learning balanced discrimination.
 
-### Gray synthetic tiles: zero-gain trials retained
+This does not show that adversarial training generally fails. Pure PGD training, class
+imbalance, BatchNorm exposure, optimization choices and the finite budget are all
+plausible contributors. It does show that this particular comparison failed—and that
+overall accuracy alone would have concealed the failure.
 
-4 of 36 recorded single-start synthetic optimization trials had zero unregularized response gain. Their gray/blank tiles are unsuccessful stimuli, not evidence of dead channels or that the model learned nothing.
+## What the internal pictures can and cannot add
 
-| Arm | Layer | Channel | Seeded initial response | Final response | Gain | Real calibration mean: cat | Real calibration mean: dog |
-|---|---|---:|---:|---:|---:|---:|---:|
-| adversarial | `network.layer2` | 73 | 0.0000 | 0.0000 | 0.0000 | 0.1088 | 0.1115 |
-| adversarial | `network.layer4` | 491 | 0.0000 | 0.0000 | 0.0000 | 0.8542 | 0.9773 |
-| adversarial | `network.layer4` | 418 | 0.0000 | 0.0000 | 0.0000 | 0.4555 | 1.4753 |
-| adversarial | `network.layer4` | 61 | 0.0000 | 0.0000 | 0.0000 | 0.4501 | 1.2567 |
+The analysis generated eight registered feature families for both checkpoints:
 
-These channels respond positively to real calibration images, as shown above. The fixed seeds, selected channels, and optimization budget were preserved; no retry or replacement was used to make the atlas look better. Initial/final responses are measured on unjittered inputs, not the regularized optimization loss.
+1. input-to-stage walkthroughs through the stem, max-pool and four residual stages;
+2. actual first-layer RGB kernels;
+3. regularized activation-maximization stimuli;
+4. strongest real reference patches with theoretical receptive-field boxes;
+5. clean activation maps and channel input gradients;
+6. true-species Grad-CAM;
+7. signed occlusion effects; and
+8. response summaries plus randomized-weight checks.
 
+These tools do not all explain the same thing. A kernel is a learned weight pattern.
+An optimized stimulus is an artificial input that raises one response. An activation
+map shows where a channel fires. A gradient shows local sensitivity. Grad-CAM asks
+where a class score has positive spatial support. Occlusion asks what happens after a
+region is replaced. Similar-looking answers do not prove causality.
 
-The distinction is important: a synthesized edge or texture is an input that excites a
-channel. It does not prove that the channel learned the named concept we attach to it.
-An activation map shows where a response occurs; its receptive-field box is theoretical
-support, not an exact causal explanation.
+The diagnostics were consistent with the failure without explaining its cause. All six
+selected late PGD channels responded more strongly to dogs on the balanced reference
+sample, while standard selections separated in both directions. The PGD model labeled
+both fixed cat anchors as dogs. Its attribution-to-occlusion effects were small and
+inconsistent. Four activation-maximization attempts also produced zero gain; those gray
+tiles were kept instead of being retried for a prettier atlas.
 
-Class-specific Grad-CAM asks a different question: where does the fixed true-species logit
-respond? Equal-area top-CAM versus random occlusion measures the true-vs-other margin,
-a related but different objective, and randomized-model controls probe weight dependence.
-They provide descriptive checks, not a causal account of the training process.
+Each observation is descriptive. The channel samples were selected independently in
+each model, the maps were normalized for display, and four anchors are not a population
+study. The pictures cannot tell us which training photograph created a feature or prove
+that a channel is an eye, ear or fur detector.
 
-Clean full-test accuracy on 3669 official test images
-is 99.37% for
-standard training and 67.76% for PGD
-training. Finite PGD-20×5 robust accuracy on the paired
-200-image
-species-balanced subset is
-0.00% and
-50.00%, respectively.
+## The practical lesson
 
-| Arm | Test anchors | Top-CAM occlusion mean margin drop | Equal-area random occlusion mean margin drop | Mean randomized-model CAM correlation | Defined CAM correlations |
-|---|---:|---:|---:|---:|---:|
-| standard | 4 | 1.8832 | 0.3178 | -0.1613 | 3/4 |
-| adversarial | 4 | 0.0129 | 0.0135 | -0.1233 | 2/4 |
+Interpretability should follow a minimum model-validity check, not replace it. Before
+explaining a classifier, inspect at least:
 
-The scope remains one dataset, one architecture, and one split/seed family.
-ImageNet-pretrained features, synthetic optimization artifacts, backgrounds, finite attack
-search, and coarse localization are credible limitations. No physical or safe-use
-conclusion follows. Original pet photos remain local; public visuals are synthetic or
-aggregate.
+- overall and macro accuracy;
+- per-class recall;
+- the prediction-count distribution;
+- a simple class-prior baseline; and
+- failures on fixed, non-cherry-picked examples.
+
+Only after those checks does it make sense to ask what the internal representations are
+doing. Here, visualization was still useful—but as a failure-analysis tool. It helped
+show what a collapsed model responded to while preventing an attractive gallery from
+being mistaken for evidence of useful robust features.
+
+## Scope boundary
+
+The validation partition was held out from fitting and did not select checkpoints, but
+this active workflow did not compute official-test accuracy or post-training attack
+accuracy. PGD was a training objective, not a measured robustness result. One
+ImageNet-initialized model pair, one split/seed family, 64 reference images and four
+walkthrough anchors cannot establish a general conclusion about adversarial training or
+CNN semantics.
+
+The defensible conclusion is narrower: **under this exact pure-PGD-5 and imbalanced
+Cat/Dog protocol, the adversarial arm collapsed to the majority class; class-aware
+monitoring exposed the failure, and feature visualization helped characterize it without
+turning it into a robustness claim.**
+
+[Technical report](technical_report.md) · [Results](../docs/results.md) ·
+[Reproduction guide](../README.md)

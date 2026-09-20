@@ -1,0 +1,112 @@
+experiment:
+  id: cat-dog-cnn-feature-visualization-v2
+  title: Cat and Dog CNN Feature Learning and Localization
+  created_at: "2026-09-17T16:49:00+05:30"
+  expected_python: "3.13.15"
+  public_actions_authorized: false
+
+paths:
+  data: data
+  weights: weights
+  checkpoints: checkpoints
+  artifacts: artifacts
+  results: results/generated
+  figures: figures/generated
+  reports: reports/generated
+
+dataset:
+  name: Oxford-IIIT Pet
+  expected_trainval: 3680
+  expected_test: 3669
+  label_mode: species
+  classes: 2
+  train_fraction: 0.8
+  split_seed: oxford-pets-split-20260914
+  attack_per_class: 100
+  projection_per_class: 10  # Historical helper compatibility; unused by the active feature stage.
+  selection_seed: oxford-pets-selection-20260914
+
+model:
+  architecture: resnet18
+  weights: IMAGENET1K_V1
+  classes: 2
+  feature_dim: 512
+  initialization_seed: 20260915
+
+input:
+  size: 224
+  eval_resize: 256
+  train_crop_scale: [0.8, 1.0]
+  horizontal_flip_probability: 0.5
+  imagenet_mean: [0.485, 0.456, 0.406]
+  imagenet_std: [0.229, 0.224, 0.225]
+
+training:
+  epochs: 15
+  micro_batch_size: 16
+  gradient_accumulation_steps: 2
+  evaluation_batch_size: 16
+  num_workers: 2
+  backbone_learning_rate: 0.0001
+  head_learning_rate: 0.001
+  weight_decay: 0.0001
+  warmup_epochs: 1
+  data_seed: 20260916
+  attack_seed: 20260917
+  dtype: float32
+  device: mps
+
+attack:
+  norm: linf
+  epsilon: 0.01568627450980392
+  train_steps: 5
+  evaluation_steps: 20
+  step_size: 0.00392156862745098
+  random_start: true
+  evaluation_restarts: 5
+  evaluation_seed: 20260918
+
+corruptions:
+  gaussian_noise: [0.02, 0.05]
+  gaussian_blur: [0.75, 1.5]
+  brightness: [0.8, 0.6]
+  contrast: [0.75, 0.5]
+
+calibration:
+  target_coverage: 0.9
+  ece_bins: 15
+  temperature_bounds: [0.05, 20.0]
+
+# Superseded embedding-helper settings. The active CLI/notebook does not execute
+# PCA, t-SNE, UMAP, neighbour retention, or a representation bootstrap. Retained
+# as inert compatibility fields so the recorded binary run identity stays stable.
+representations:
+  neighbours: 5
+  bootstrap_replicates: 2000
+  bootstrap_seed: 20260919
+  projection_seed: 20260920
+  tsne_perplexity: 30
+  tsne_learning_rate: auto
+  tsne_iterations: 1500
+  umap_neighbours: 15
+  umap_min_distance: 0.1
+  umap_metric: cosine
+
+preflight:
+  parity_atol: 0.0001
+  parity_rtol: 0.0001
+
+feature_visualization:
+  layers: [network.relu, network.layer2, network.layer4]
+  channels_per_layer: 6
+  calibration_per_class: 32
+  anchors_per_class: 2
+  seed: 20260917
+  activation_maximization_steps: 80
+  activation_maximization_learning_rate: 0.05
+  total_variation_weight: 0.0005
+  pixel_l2_weight: 0.001
+  occlusion_patch_size: 32
+  occlusion_stride: 32
+  top_occlusion_tiles: 4
+  random_occlusion_repeats: 100

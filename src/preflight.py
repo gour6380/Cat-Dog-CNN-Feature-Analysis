@@ -26,6 +26,7 @@ from src.runtime import (
     synchronize,
 )
 from src.training import experiment_provenance, learning_rate_factor
+from src.training_monitoring import prepare_training_monitoring, training_monitoring_enabled
 
 
 class _LinearProbe(nn.Module):
@@ -172,6 +173,11 @@ def run_preflight(
         )
         splits = load_registered_splits(config)
         training = splits["training"]
+        validation = []
+        if training_monitoring_enabled(config):
+            monitoring_protocol = prepare_training_monitoring(config, splits)
+            training = monitoring_protocol.fit_records
+            validation = monitoring_protocol.validation_records
         calibration = splits["calibration"]
         test = splits["test"]
         classes = config.integer("dataset", "classes")
@@ -182,7 +188,7 @@ def run_preflight(
         if {item.sample_id for item in training} & {item.sample_id for item in calibration}:
             raise SafetyStop("training/calibration overlap detected")
         if {item.sample_id for item in test} & {
-            item.sample_id for item in [*training, *calibration]
+            item.sample_id for item in [*training, *validation, *calibration]
         }:
             raise SafetyStop("official test partition overlap detected")
         dataset_a = PetRecordDataset(training[:1], config, training=True, epoch=1)
@@ -376,6 +382,7 @@ def run_preflight(
             "silent_fallback_disabled": os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] == "0",
             "data": {
                 "training": len(training),
+                "validation": len(validation),
                 "calibration": len(calibration),
                 "test": len(test),
                 "classes": classes,

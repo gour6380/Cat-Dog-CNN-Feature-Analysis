@@ -32,8 +32,10 @@ def _remote_names(root: Path) -> list[str]:
 
 
 def setup_experiment(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
-    if _remote_names(config.root):
-        raise SetupError("this local-only Week 3 project must not have a Git remote")
+    # A normal GitHub clone has an ``origin`` remote. Record remote names for
+    # provenance, but never treat their presence as permission to publish or as a
+    # reason to block a local, read/write experiment setup.
+    remote_names = _remote_names(config.root)
     for key in ("data", "weights", "checkpoints", "artifacts", "results", "figures", "reports"):
         config.project_path(key).mkdir(parents=True, exist_ok=True)
     status("Setup: verifying the official Oxford-IIIT Pet files...", enabled=progress)
@@ -47,9 +49,14 @@ def setup_experiment(config: ExperimentConfig, *, progress: bool = True) -> dict
         initialization = initialization_manifest(config)
         stages.update(1)
     requirements = config.root / "requirements.txt"
+    from src.training_monitoring import prepare_training_monitoring, training_monitoring_enabled
+
+    monitoring = (
+        prepare_training_monitoring(config) if training_monitoring_enabled(config) else None
+    )
     if not requirements.is_file():
         raise SetupError("canonical requirements.txt is missing")
-    result = {
+    result: dict[str, Any] = {
         "schema_version": 1,
         "status": "complete",
         "created_at": utc_now(),
@@ -61,9 +68,10 @@ def setup_experiment(config: ExperimentConfig, *, progress: bool = True) -> dict
         "data": data_manifest,
         "pretrained": pretrained_manifest,
         "initialization": initialization,
+        **({"training_monitoring": monitoring.manifest} if monitoring is not None else {}),
         "environment": environment_snapshot(),
         "git": git_state(config.root),
-        "remote_names": [],
+        "remote_names": remote_names,
         "public_actions": "none",
     }
     atomic_write_json(config.project_path("artifacts") / "setup.json", result)

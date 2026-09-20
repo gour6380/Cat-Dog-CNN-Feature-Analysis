@@ -15,20 +15,43 @@ from src.pilot import assert_pilot_isolated, pilot_summary, verify_preserved_bas
 ROOT = Path(__file__).parents[1]
 
 
-def test_pilot_parser_and_original_configuration_are_separate() -> None:
+@pytest.fixture
+def current_baseline_pilot() -> ExperimentConfig:
+    """Synthetic pilot identity, without changing the archived pilot YAML."""
+
+    archived = load_config(ROOT / "configs/pgd_pilot.yaml")
+    original = load_config(ROOT / archived.value("pilot", "original_config", str))
+    raw = copy.deepcopy(archived.raw)
+    raw["pilot"]["original_config_sha256"] = original.sha256
+    return ExperimentConfig(archived.path, archived.root, raw, "synthetic-current-baseline-pilot")
+
+
+def test_pilot_parser_and_original_configuration_are_separate(
+    current_baseline_pilot: ExperimentConfig,
+) -> None:
     args = _parser().parse_args(
         ["pilot", "--config", "configs/pgd_pilot.yaml", "--device", "mps", "--no-progress"]
     )
     assert args.command == "pilot" and args.no_progress
-    config = load_config(ROOT / "configs/pgd_pilot.yaml")
-    assert_pilot_isolated(config)
-    assert load_config(ROOT / "configs/experiment.yaml").sha256 == (
+    assert_pilot_isolated(current_baseline_pilot)
+    original = load_config(ROOT / current_baseline_pilot.value("pilot", "original_config", str))
+    assert original.path != current_baseline_pilot.path
+    assert original.sha256 == current_baseline_pilot.value("pilot", "original_config_sha256", str)
+
+
+def test_archived_pilot_rejects_revised_original_configuration_identity() -> None:
+    archived = load_config(ROOT / "configs/pgd_pilot.yaml")
+    original = load_config(ROOT / archived.value("pilot", "original_config", str))
+    assert archived.value("pilot", "original_config_sha256", str) == (
         "3b96c26d328cffc308cb6de70e070748bba3c9fe7a7b229ccba6749f8aec2a91"
     )
+    assert original.sha256 != archived.value("pilot", "original_config_sha256", str)
+    with pytest.raises(ConfigError, match="original configuration identity changed"):
+        assert_pilot_isolated(archived)
 
 
-def test_pilot_rejects_original_output_collision() -> None:
-    config = load_config(ROOT / "configs/pgd_pilot.yaml")
+def test_pilot_rejects_original_output_collision(current_baseline_pilot: ExperimentConfig) -> None:
+    config = current_baseline_pilot
     raw = copy.deepcopy(config.raw)
     raw["paths"]["results"] = "results/generated"
     changed = ExperimentConfig(config.path, config.root, raw, "changed")

@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 
-from src.config import ExperimentConfig, load_config
+from src.config import ExperimentConfig, _canonical_hash, load_config
+from src.corruptions import registered_corruptions
+from src.feature_section_types import FEATURE_SECTIONS
 from src.io_utils import atomic_write_json, sha256_file
 from src.reporting import (
     ReportError,
@@ -47,7 +50,16 @@ def _evaluation_features(config: ExperimentConfig) -> tuple[dict[str, Any], dict
         "arms": {
             arm: {
                 "checkpoint_sha256": "placeholder",
-                "full_test": {"clean": metrics, "brightness_0.6": metrics},
+                "full_test": {
+                    condition: deepcopy(metrics)
+                    for condition in (
+                        "clean",
+                        *[
+                            c.identifier
+                            for c in registered_corruptions(config.section("corruptions"))
+                        ],
+                    )
+                },
                 "attack_subset": {"fgsm": attacks, "pgd": attacks},
             }
             for arm in ("standard", "adversarial")
@@ -208,10 +220,28 @@ def test_missing_synthetic_response_metadata_gracefully_skips_note() -> None:
     assert _synthetic_optimization_note(features) == ""
 
 
-def _report_bundle(tmp_path: Path) -> ExperimentConfig:
+def _report_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ExperimentConfig:
     base = load_config(ROOT / "configs/experiment.yaml")
-    config = ExperimentConfig(base.path, tmp_path, deepcopy(base.raw), base.sha256)
+    raw = deepcopy(base.raw)
+    # Legacy report-shape fixture: no training/array provenance is fabricated.
+    # New runtime manifests and visuals are covered in test_runtime_visuals.
+    raw["training_monitoring"]["enabled"] = False
+    config = ExperimentConfig(base.path, tmp_path, raw, _canonical_hash(raw))
     evaluation, features = _evaluation_features(config)
+    # Root engine integrity is exercised with real synthetic receipts in
+    # test_feature_sections; here only rendering/orchestration is bounded.
+    monkeypatch.setattr(
+        "src.feature_sections.validate_feature_evidence", lambda *_args, **_kw: None
+    )
+    features.update(
+        {
+            "status": "complete",
+            "method_sha256": "synthetic-method",
+            "completion": {"missing": []},
+            "section_receipts": {},
+            "provenance": {"initialization_sha256": "initialization"},
+        }
+    )
     for arm in ("standard", "adversarial"):
         checkpoint = checkpoint_path(config, arm)
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -219,7 +249,38 @@ def _report_bundle(tmp_path: Path) -> ExperimentConfig:
         checkpoint_hash = sha256_file(checkpoint)
         evaluation["arms"][arm]["checkpoint_sha256"] = checkpoint_hash
         features["arms"][arm]["checkpoint_sha256"] = checkpoint_hash
-    atomic_write_json(config.project_path("results") / "evaluation.json", evaluation)
+        features["section_receipts"][arm] = {}
+        for section in FEATURE_SECTIONS:
+            image = config.project_path("figures") / f"{arm}-{section}.png"
+            image.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (4, 4), "white").save(image)
+            features["figures"].append(
+                {
+                    "arm": arm,
+                    "section": section,
+                    "kind": section,
+                    "caption": "Synthetic fixture, not scientific evidence.",
+                    "shareable": section in {"synthetic", "kernels"},
+                    "path": str(image.relative_to(tmp_path)),
+                    "sha256": sha256_file(image),
+                }
+            )
+            arrays = tmp_path / f"artifacts/features/{arm}-{section}.npz"
+            arrays.parent.mkdir(parents=True, exist_ok=True)
+            arrays.write_bytes(b"bounded synthetic array fixture")
+            receipt = arrays.with_suffix(".json")
+            atomic_write_json(
+                receipt,
+                {
+                    "arrays_path": str(arrays.relative_to(tmp_path)),
+                    "arrays_sha256": sha256_file(arrays),
+                    "dependencies": [],
+                },
+            )
+            features["section_receipts"][arm][section] = {
+                "path": str(receipt.relative_to(tmp_path)),
+                "sha256": sha256_file(receipt),
+            }
     atomic_write_json(config.project_path("results") / "feature_visualizations.json", features)
     atomic_write_json(
         config.project_path("artifacts") / "data/manifest.json",
@@ -232,16 +293,19 @@ def _report_bundle(tmp_path: Path) -> ExperimentConfig:
     return config
 
 
-def test_report_consumes_feature_evidence_and_preserves_provenance(tmp_path: Path) -> None:
-    config = _report_bundle(tmp_path)
+def test_report_consumes_feature_evidence_and_preserves_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _report_bundle(tmp_path, monkeypatch)
     summary = report(config, progress=False)
     assert summary["study"] == "binary species CNN feature learning and localization"
     assert summary["feature_diagnostics"]["model_states_unchanged"] is True
     assert "primary_supported" not in summary
-    assert summary["clean_species_prediction_diagnostics"] == {
-        "standard": {"available": False},
-        "adversarial": {"available": False},
-    }
+    assert "clean_species_prediction_diagnostics" not in summary
+    assert "secondary_policy_shift" not in summary
+    assert summary["feature_diagnostics"]["population_accuracy_measured"] is False
+    assert not (config.project_path("results") / "evaluation.json").exists()
+    assert not (config.project_path("reports") / "sunday-draft.md").exists()
     import json
 
     release = json.loads(Path(summary["local_release_manifest"]).read_text(encoding="utf-8"))
@@ -255,8 +319,10 @@ def test_report_consumes_feature_evidence_and_preserves_provenance(tmp_path: Pat
     assert release["files"][path] == sha256_file(config.root / path)
 
 
-def test_report_rejects_mutated_feature_models(tmp_path: Path) -> None:
-    config = _report_bundle(tmp_path)
+def test_report_rejects_mutated_feature_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _report_bundle(tmp_path, monkeypatch)
     path = config.project_path("results") / "feature_visualizations.json"
     import json
 
@@ -267,10 +333,35 @@ def test_report_rejects_mutated_feature_models(tmp_path: Path) -> None:
         report(config, progress=False)
 
 
+def test_report_ignores_unrelated_partial_evaluation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _report_bundle(tmp_path, monkeypatch)
+    atomic_write_json(config.project_path("results") / "evaluation.json", {"status": "partial"})
+    assert report(config, progress=False)["status"] == "complete current feature walkthrough"
+
+
+def test_report_rejects_incomplete_feature_sections_without_writing_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    config = _report_bundle(tmp_path, monkeypatch)
+    path = config.project_path("results") / "feature_visualizations.json"
+    features = json.loads(path.read_text())
+    features["status"] = "partial"
+    features["completion"] = {"missing": ["adversarial/diagnostics"]}
+    atomic_write_json(path, features)
+    with pytest.raises(ReportError, match="complete current feature sections"):
+        report(config, progress=False)
+    assert not config.project_path("reports").exists()
+
+
 def test_binary_release_inventory_excludes_retained_superseded_breed_artifacts(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = _report_bundle(tmp_path)
+    config = _report_bundle(tmp_path, monkeypatch)
     old_checkpoint = tmp_path / "checkpoints/old-breed-config/standard/epoch-015.pt"
     old_checkpoint.parent.mkdir(parents=True)
     old_checkpoint.write_bytes(b"retained historical evidence")

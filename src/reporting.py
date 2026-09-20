@@ -18,7 +18,7 @@ from src.io_utils import (
     utc_now,
 )
 from src.progress import status
-from src.training import checkpoint_path, experiment_provenance
+from src.training import checkpoint_path
 
 
 class ReportError(RuntimeError):
@@ -288,6 +288,18 @@ def _technical_report(
     config: ExperimentConfig, evaluation: dict[str, Any], features: dict[str, Any]
 ) -> str:
     limitations = "\n".join(f"- {item}" for item in features["limitations"])
+    from src.training_monitoring import training_monitoring_enabled
+
+    validation_note = (
+        f"The revised protocol additionally reserves "
+        f"{100 * config.number('training_monitoring', 'validation_fraction'):g}% "
+        f"of registered training within each breed (seed "
+        f"`{config.value('training_monitoring', 'validation_seed', str)}`) for validation, leaving "
+        "calibration and test unchanged. Clean fitting/validation monitoring is evaluation-only; "
+        "it never selects a checkpoint. Original results remain historical, not fresh v3 evidence."
+        if training_monitoring_enabled(config)
+        else "This protocol has no separate monitoring validation reserve."
+    )
     target_coverage = 100.0 * config.number("calibration", "target_coverage")
     return f"""# Technical report: cat and dog CNN feature learning and localization
 
@@ -301,6 +313,7 @@ What patterns activate early, middle, and late CNN channels, and where do the se
 channels and cat/dog classifier respond within actual images? This is a two-class species
 study, not a 37-breed projection study. Breed metadata remains available and the official
 trainval partition is split within each breed; the official test partition stays untouched.
+{validation_note}
 
 Both ResNet-18 arms start from identical ImageNet tensors and an identical new binary head.
 The standard arm trains on clean inputs; the adversarial arm trains on bounded PGD inputs.
@@ -462,99 +475,221 @@ Status: draft only; not approved or published.
 """
 
 
+def load_current_feature_evidence(config: ExperimentConfig) -> dict[str, Any]:
+    """Require complete eight-section, two-model current evidence, never legacy substitutes."""
+    from src.data import DataError
+    from src.feature_section_types import FEATURE_SECTIONS
+    from src.feature_sections import FeatureEvidenceError, validate_feature_evidence
+    from src.training import ResumeError
+    from src.training_monitoring import MonitoringError
+
+    features = _load(config.project_path("results") / "feature_visualizations.json")
+    if features.get("config_sha256") != config.sha256:
+        raise ReportError("feature diagnostics belong to another configuration")
+    if (
+        features.get("status") != "complete"
+        or features.get("completion", {}).get("missing")
+        or any(
+            set(features.get("section_receipts", {}).get(arm, {})) != set(FEATURE_SECTIONS)
+            for arm in ("standard", "adversarial")
+        )
+    ):
+        raise ReportError("complete current feature sections are required; fresh results pending")
+    try:
+        validate_feature_evidence(config, features)
+    except (FeatureEvidenceError, DataError, MonitoringError, ResumeError, OSError) as error:
+        raise ReportError(f"complete current feature sections are required: {error}") from error
+    for arm in ("standard", "adversarial"):
+        measured = features.get("arms", {}).get(arm, {})
+        if measured.get("state_unchanged") is not True:
+            raise ReportError(f"{arm} model state changed during feature analysis")
+        path = checkpoint_path(config, cast(Any, arm))
+        if not path.is_file() or measured.get("checkpoint_sha256") != sha256_file(path):
+            raise ReportError(f"{arm} feature checkpoint identity is invalid")
+        if {
+            record.get("section")
+            for record in features.get("figures", [])
+            if record.get("arm") == arm
+        } != set(FEATURE_SECTIONS):
+            raise ReportError(f"complete registered feature images are required for {arm}")
+    for figure in features.get("figures", []):
+        path = (config.root / figure["path"]).resolve()
+        if (
+            not path.is_relative_to(config.root)
+            or not path.is_file()
+            or sha256_file(path) != figure.get("sha256")
+        ):
+            raise ReportError("feature image alignment/hash mismatch")
+    return features
+
+
+def _feature_summary(config: ExperimentConfig, features: dict[str, Any]) -> str:
+    from src.feature_section_types import FEATURE_SECTIONS
+
+    rows = ["| Model | Verified feature families | Local figures |", "|---|---:|---:|"]
+    for arm in ("standard", "adversarial"):
+        count = sum(figure.get("arm") == arm for figure in features["figures"])
+        rows.append(f"| {arm} | {len(FEATURE_SECTIONS)}/{len(FEATURE_SECTIONS)} | {count} |")
+    limits = "\n".join(f"- {item}" for item in features.get("limitations", []))
+    table = "\n".join(rows)
+    return f"""# Cat/dog CNN — current feature walkthrough
+
+Complete current-run feature evidence for the standard and PGD-trained ResNet-18 models.
+Configured training length: {config.integer("training", "epochs")} epochs. PGD is a training
+objective here; this report does not measure attack accuracy or certified robustness.
+
+{table}
+
+## What the pictures show
+
+- Input-to-score stages: stem, max-pooling, layer1–layer4, pooled 512 features and cat/dog scores.
+- Pattern preference: early kernels, synthetic preferred stimuli and strongest real patches.
+- Spatial response: channel activation maps and input gradients.
+- Prediction influence: true-species Grad-CAM, equal-area occlusion and randomized-weight controls.
+
+Channels are selected from registered reference/calibration images, not attractive test examples.
+Both models' fixed hash-selected cat/dog anchors remain visible. Their scores and predictions
+describe those images only: four anchors are not a test-accuracy estimate.
+Feature maps are channel responses, not reconstructed photographs or verified anatomical detectors.
+These methods cannot recover which training pixels originally taught a filter.
+
+{_synthetic_optimization_note(features)}
+
+## Local illustrated evidence
+
+[Read-only feature notebook](cat_dog_feature_results.ipynb) embeds the registered images.
+Photographs, crops and overlays stay ignored local artifacts. Only reviewed kernel,
+synthetic-stimulus and aggregate figures are eligible for a separate public export gate.
+Saved training history may supply compact loss/validation charts; no missing curve is inferred.
+
+## Limitations
+
+{limits}
+
+Configuration SHA-256: {config.sha256}.
+Feature-method SHA-256: {features.get("method_sha256", "not recorded")}.
+Status: local measured walkthrough; no publishing, profile edits or applications performed.
+"""
+
+
 def _release_files(config: ExperimentConfig) -> list[Path]:
-    roots = [
-        config.root / "src",
-        config.root / "scripts",
-        config.root / "notebooks",
-        config.root / "configs",
-        config.root / "docs",
-        config.project_path("artifacts"),
-        config.project_path("results") / "per_sample",
-        config.project_path("reports"),
-        config.project_path("checkpoints") / config.sha256[:16],
+    """Inventory current feature receipts, not unrelated attack/corruption caches."""
+    files = [
+        config.root / name
+        for name in ("README.md", "pyproject.toml", "requirements.txt", "setup_venv.sh")
     ]
-    files: list[Path] = [
-        config.root / "README.md",
-        config.root / "pyproject.toml",
-        config.root / "requirements.txt",
-        config.root / "setup_venv.sh",
-    ]
-    files.extend(
-        config.project_path("results") / name
-        for name in ("evaluation.json", "feature_visualizations.json", "eda.json", "summary.json")
-    )
-    feature_path = config.project_path("results") / "feature_visualizations.json"
-    if feature_path.is_file():
-        features = _load(feature_path)
-        files.extend(config.root / figure["path"] for figure in features["figures"])
-    for root in roots:
+    for directory in ("src", "scripts", "notebooks", "configs"):
+        root = config.root / directory
         if root.is_dir():
             files.extend(
                 path
                 for path in root.rglob("*")
                 if path.is_file() and "__pycache__" not in path.parts
             )
-    manifest_path = config.project_path("artifacts") / "release" / "local-release-manifest.json"
+    features_path = config.project_path("results") / "feature_visualizations.json"
+    files.extend((features_path, config.project_path("results") / "summary.json"))
+    if features_path.is_file():
+        features = _load(features_path)
+        files.extend(config.root / figure["path"] for figure in features["figures"])
+        visited: set[Path] = set()
+
+        def inventory_receipt(receipt: dict[str, Any]) -> None:
+            path = (config.root / receipt["path"]).resolve()
+            if path in visited:
+                return
+            visited.add(path)
+            if not path.is_relative_to(config.root) or not path.is_file():
+                raise ReportError("registered feature receipt is missing or outside project")
+            if sha256_file(path) != receipt["sha256"]:
+                raise ReportError("registered feature receipt hash mismatch")
+            files.append(path)
+            section = _load(path)
+            arrays = (config.root / section["arrays_path"]).resolve()
+            if (
+                not arrays.is_relative_to(config.root)
+                or not arrays.is_file()
+                or sha256_file(arrays) != section["arrays_sha256"]
+            ):
+                raise ReportError("registered feature array hash mismatch")
+            files.append(arrays)
+            for dependency in section.get("dependencies", []):
+                inventory_receipt(dependency)
+
+        for registry in features.get("section_receipts", {}).values():
+            for receipt in registry.values():
+                inventory_receipt(receipt)
+    for arm in ("standard", "adversarial"):
+        files.extend(
+            (
+                checkpoint_path(config, cast(Any, arm)),
+                config.project_path("artifacts") / "training" / f"{arm}.json",
+            )
+        )
+    reports = config.project_path("reports")
+    files.extend(
+        reports / name for name in ("technical-report.md", "cat_dog_feature_results.ipynb")
+    )
+    files.append(config.project_path("artifacts") / "features" / "results-notebook.json")
+    from src.runtime_visuals import current_visual_manifests
+
+    for manifest in current_visual_manifests(config, feature_only=True):
+        if manifest["group"] == "report" or manifest["group"].startswith("training-"):
+            files.append(
+                config.project_path("results") / "visualizations" / f"{manifest['group']}.json"
+            )
+            files.extend(config.root / figure["path"] for figure in manifest["figures"])
     return sorted(
-        {path.resolve() for path in files if path.is_file() and path.resolve() != manifest_path}
+        {
+            path.resolve()
+            for path in files
+            if path.is_file() and path.resolve().is_relative_to(config.root)
+        }
     )
 
 
 def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]:
-    status("Report: loading verified evaluation and CNN feature evidence...", enabled=progress)
-    evaluation = _load(config.project_path("results") / "evaluation.json")
-    features = _load(config.project_path("results") / "feature_visualizations.json")
-    if evaluation.get("config_sha256") != config.sha256:
-        raise ReportError("evaluation belongs to another configuration")
-    if features.get("config_sha256") != config.sha256:
-        raise ReportError("feature diagnostics belong to another configuration")
-    for arm in ("standard", "adversarial"):
-        if features["arms"][arm].get("state_unchanged") is not True:
-            raise ReportError(f"{arm} model state changed during feature analysis")
-        checkpoint_hash = sha256_file(checkpoint_path(config, cast(Any, arm)))
-        if features["arms"][arm].get("checkpoint_sha256") != checkpoint_hash:
-            raise ReportError(f"{arm} feature checkpoint identity is invalid")
-        if evaluation["arms"][arm].get("checkpoint_sha256") != checkpoint_hash:
-            raise ReportError(f"{arm} evaluation checkpoint identity is invalid")
-    destination = config.project_path("reports")
-    technical = destination / "technical-report.md"
-    long_form = destination / "robust-vision-long-form-report.md"
-    sunday = destination / "sunday-draft.md"
-    atomic_write_text(technical, _technical_report(config, evaluation, features))
-    atomic_write_text(long_form, _long_form(config, evaluation, features))
-    atomic_write_text(sunday, _sunday_draft(config, evaluation, features))
+    status("Report: checking current CNN feature sections...", enabled=progress)
+    features = load_current_feature_evidence(config)
+    technical = config.project_path("reports") / "technical-report.md"
+    atomic_write_text(technical, _feature_summary(config, features))
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": utc_now(),
         "config_sha256": config.sha256,
         "study": "binary species CNN feature learning and localization",
-        "clean_species_prediction_diagnostics": _species_diagnostics(evaluation),
+        "status": "complete current feature walkthrough",
         "feature_evidence_sha256": sha256_file(
             config.project_path("results") / "feature_visualizations.json"
         ),
+        "feature_method_sha256": features["method_sha256"],
         "feature_diagnostics": {
-            "calibration_sample_count": len(features["selection"]["calibration_sample_ids"]),
+            "reference_sample_count": len(features["selection"]["calibration_sample_ids"]),
             "test_anchor_count": len(features["selection"]["test_anchor_ids"]),
             "model_states_unchanged": True,
+            "population_accuracy_measured": False,
         },
-        "secondary_policy_shift": evaluation["secondary_policy_shift"],
-        "reports": [str(path.relative_to(config.root)) for path in (technical, long_form, sunday)],
+        "reports": [str(technical.relative_to(config.root))],
         "approval": "not requested",
         "publication": "not performed",
     }
     atomic_write_json(config.project_path("results") / "summary.json", summary)
+    from src.runtime_visuals import ensure_report_visuals
+
+    ensure_report_visuals(config)
     from src.feature_results_notebook import build_feature_results_notebook
 
-    build_feature_results_notebook(config)
+    notebook = build_feature_results_notebook(config)
+    summary["reports"].append(str(notebook.relative_to(config.root)))
+    atomic_write_json(config.project_path("results") / "summary.json", summary)
     files = _release_files(config)
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": utc_now(),
-        "status": "local evidence bundle; no public release",
+        "status": "local feature evidence bundle; no public release",
         "config_sha256": config.sha256,
+        "feature_method_sha256": features["method_sha256"],
         "source_sha256": source_hash(config.root),
-        "provenance": experiment_provenance(config),
+        "provenance": features.get("provenance", {}),
         "environment": environment_snapshot(),
         "git": git_state(config.root),
         "fixed_checkpoints": {
@@ -573,6 +708,7 @@ def report(config: ExperimentConfig, *, progress: bool = True) -> dict[str, Any]
     manifest_path = config.project_path("artifacts") / "release" / "local-release-manifest.json"
     atomic_write_json(manifest_path, manifest)
     status(
-        "Report complete: local reports and the release manifest were written.", enabled=progress
+        "Report complete: current feature summary and illustrated notebook saved locally.",
+        enabled=progress,
     )
     return {**summary, "local_release_manifest": str(manifest_path)}

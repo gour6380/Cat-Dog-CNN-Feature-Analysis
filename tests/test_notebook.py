@@ -1,340 +1,419 @@
 from __future__ import annotations
 
-import hashlib
-import json
+import ast
 import re
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import nbformat
 import pytest
+from tqdm.std import tqdm as TerminalProgress
 
 from scripts import build_notebook
 from src.config import load_config
+from src.feature_section_types import FEATURE_SECTIONS
 from src.io_utils import source_hash
 from src.notebook_runner import CallingKernelSpecs
-from src.notebook_support import (
-    ROOT,
-    NotebookStage,
-    notebook_context,
-    require_project_environment,
-    run_stage,
-)
+from src.notebook_support import ROOT, notebook_context, require_project_environment, run_stage
 from src.progress import NotebookProgress, tqdm
 
-CONFIG = ROOT / "configs" / "experiment.yaml"
-NOTEBOOK = ROOT / "notebooks" / "cat_dog_cnn_features.ipynb"
+CONFIG = ROOT / "configs/experiment.yaml"
+NOTEBOOK = ROOT / "notebooks/cat_dog_cnn_features.ipynb"
 
 
-def _public_gallery_manifest(tmp_path: Path) -> tuple[dict[str, Any], Path]:
-    records = [
-        ("experiment-workflow.png", "species_response", "experiment"),
-        ("standard-synthetic-atlas.png", "activation_maximization", "standard"),
-        ("adversarial-synthetic-atlas.png", "activation_maximization", "adversarial"),
-        ("experiment-accuracy-context.png", "species_response", "experiment"),
-        ("standard-kernels.png", "kernels", "standard"),
-        ("adversarial-kernels.png", "kernels", "adversarial"),
-        ("standard-species-response.png", "species_response", "standard"),
-        ("adversarial-species-response.png", "species_response", "adversarial"),
-    ]
-    figures: list[dict[str, str]] = []
-    assets: dict[str, str] = {}
-    asset_root = tmp_path / "docs/assets"
-    asset_root.mkdir(parents=True)
-    for name, kind, arm in records:
-        path = asset_root / name
-        path.write_bytes(name.encode())
-        relative = path.relative_to(tmp_path).as_posix()
-        figures.append({"path": relative, "kind": kind, "arm": arm, "caption": f"Saved {name}"})
-        assets[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest = {
-        "figures": figures,
-        "provenance": {"configuration_sha256": "current", "public_assets": assets},
-    }
-    manifest_path = tmp_path / "docs/results.json"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    return manifest, manifest_path
+def _cell(identifier: str) -> Any:
+    # Presentation tests exercise generated cells, not the owner's saved execution.
+    notebook = build_notebook.make_notebook(run_full=True)
+    return next(cell for cell in notebook.cells if cell.id == identifier)
 
 
-def test_public_gallery_links_compact_matching_synthetic_assets(tmp_path: Path) -> None:
-    _public_gallery_manifest(tmp_path)
-    cells = build_notebook._public_preview_cells(tmp_path, config_sha256="current")
-    assert len(cells) == 7  # Intro plus workflow, two atlases, accuracy context, two kernels.
-    assert (
-        "not a dead channel" in cells[0].source and "failed trials are retained" in cells[0].source
-    )
-    assert all(cell.cell_type == "markdown" and not cell.get("attachments") for cell in cells)
-    assert all("../docs/assets/" in cell.source for cell in cells[1:])
-    assert "standard-synthetic-atlas.png" in cells[2].source
-    assert "adversarial-synthetic-atlas.png" in cells[3].source
-    assert not any("species-response.png" in cell.source for cell in cells)
-    assert [cell.id for cell in cells] == [
-        cell.id for cell in build_notebook._public_preview_cells(tmp_path, config_sha256="current")
-    ]
-
-
-@pytest.mark.parametrize(
-    "invalid_kind", ["stale-config", "unsafe-kind", "altered-hash", "private-path", "pending"]
-)
-def test_public_gallery_omits_unverified_or_pending_evidence(
-    tmp_path: Path, invalid_kind: str
-) -> None:
-    manifest, path = _public_gallery_manifest(tmp_path)
-    manifest["figures"] = [manifest["figures"][1]]
-    if invalid_kind == "stale-config":
-        manifest["provenance"]["configuration_sha256"] = "old-breed-config"
-    elif invalid_kind == "unsafe-kind":
-        manifest["figures"][0]["kind"] = "top_real_patches"
-    elif invalid_kind == "altered-hash":
-        (tmp_path / manifest["figures"][0]["path"]).write_bytes(b"altered asset bytes")
-    elif invalid_kind == "private-path":
-        private_path = tmp_path / "figures/private-photo.png"
-        private_path.parent.mkdir()
-        private_path.write_bytes(b"local photograph")
-        manifest["figures"][0]["path"] = "figures/private-photo.png"
-        manifest["provenance"]["public_assets"]["figures/private-photo.png"] = hashlib.sha256(
-            private_path.read_bytes()
-        ).hexdigest()
-    else:
-        manifest["figures"] = []
-        manifest["provenance"]["public_assets"] = {}
-    path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert build_notebook._public_preview_cells(tmp_path, config_sha256="current") == []
-
-
-def test_notebook_gallery_adds_only_markdown_and_preserves_safe_code(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _public_gallery_manifest(tmp_path)
-    gallery = build_notebook._public_preview_cells(tmp_path, config_sha256="current")
-    monkeypatch.setattr(build_notebook, "_public_preview_cells", lambda: gallery)
-    notebook = build_notebook.make_notebook()
-    base = build_notebook.make_notebook(include_public_figures=False)
-    assert notebook.cells[: len(base.cells)] == base.cells
-    assert notebook.cells[len(base.cells) :] == gallery
-    code = [cell for cell in notebook.cells if cell.cell_type == "code"]
-    assert "RUN_FULL_EXPERIMENT = False" in code[0].source
-    assert all(not cell.outputs and cell.execution_count is None for cell in code)
-    nbformat.validate(notebook)
-
-
-def test_source_notebook_is_valid_ordered_and_output_free() -> None:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)  # type: ignore[no-untyped-call]
+def test_generated_notebook_is_compact_valid_ordered_and_output_free() -> None:
+    notebook = build_notebook.make_notebook(run_full=True)
     nbformat.validate(notebook)
     headings = [
-        line.strip()
+        line
         for cell in notebook.cells
         if cell.cell_type == "markdown"
         for line in cell.source.splitlines()
         if line.startswith("## ")
     ]
     assert headings == [
-        "## 1. Question and claim boundary",
-        "## 2. Editable protocol and matched comparison",
-        "## 3. Environment and native PyTorch MPS",
-        "## 4. Dataset and EDA",
-        "## 5. Model depth and spatial features",
-        "## 6. Native MPS preflight",
-        "## 7. Standard fine-tuning",
-        "## 8. PGD-5 adversarial fine-tuning",
-        "## 9. Attacks, corruptions, and risk-aware evaluation",
-        "## 10. Learned filters, real image parts, and attribution",
-        "## 11. Reports, interpretation, and local artifact inventory",
-        "## 12. Reproduction and references",
+        "## 1. Setup and data",
+        "## 2. Training",
+        "## 3. Learned features",
+        "## 4. Prediction influence",
+        "## 5. Current-run results",
     ]
     assert notebook.metadata.kernelspec.name == "oxford-pets-adversarial-representations"
-    code_cells = [cell for cell in notebook.cells if cell.cell_type == "code"]
-    assert "RUN_FULL_EXPERIMENT = False" in code_cells[0].source
-    assert all(cell.execution_count is None and cell.outputs == [] for cell in code_cells)
+    code = [cell for cell in notebook.cells if cell.cell_type == "code"]
+    assert "RUN_FULL_EXPERIMENT = True" in code[0].source
+    assert code[0].metadata.tags == ["parameters"]
+    assert all(cell.execution_count is None and cell.outputs == [] for cell in code)
+    assert all(not cell.get("attachments") for cell in notebook.cells)
     source = "\n".join(cell.source for cell in notebook.cells)
-    assert "run_stage(" in source
-    assert "generate_eda(config)" in source
-    assert 'for figure_key, relative_path in eda["figures"].items()' in source
-    assert "breed_balance" not in source
-    assert "feature_visualizations.json" in source
-    assert 'figure["path"]' in source
-    assert "Grad-CAM and occlusion" in source
-    assert "true-species logit" in source
-    assert "true-species-vs-other logit margin" in source
-    assert "two cats and two dogs" in source
-    assert "cat=0, dog=1" in source
-    assert "figures/generated/projections/" not in source
-    assert "primary_hypothesis" not in source
-    assert "37-class head" not in source
-    assert "def build_model" not in source
-    assert "def pgd" not in source
-    assert "optimizer.step" not in source
+    assert "show(" not in source and "config.raw" not in source
+    assert "display_evaluation" not in source
+    assert "../docs/assets/" not in source and "docs/results.json" not in source
+    assert not any(cell.id.startswith("public-") for cell in notebook.cells)
+    assert "cat=0, dog=1" in source and "two cats and two dogs" in source
+    assert "true-species logit" in source and "true-species-vs-other logit margin" in source
+    assert "exact PGD" not in source and "PGD-20" not in source and "FGSM" not in source
+    assert "optimizer.step" not in source and "def pgd" not in source
 
 
-def test_feature_cell_reads_matching_manifest_and_dynamic_image_paths(tmp_path: Path) -> None:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)  # type: ignore[no-untyped-call]
-    cell = next(cell for cell in notebook.cells if cell.id == "run-features")
-    results = tmp_path / "results" / "generated"
-    results.mkdir(parents=True)
-    image = tmp_path / "figures" / "custom-channel.png"
-    image.parent.mkdir()
-    image.write_bytes(b"image contents are not read by the mocked display")
-    (results / "feature_visualizations.json").write_text(
-        json.dumps(
-            {
-                "config_sha256": "matching-config",
-                "created_at": "saved-evidence-time",
-                "arms": {},
-                "figures": [
-                    {
-                        "path": "figures/custom-channel.png",
-                        "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
-                        "caption": "A dynamically selected feature",
-                        "shareable": False,
-                        "arm": "standard",
-                        "kind": "activation map",
-                    }
-                ],
-                "limitations": ["local sensitivity is not causal learning"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    displays: list[object] = []
-    calls: list[tuple[str, bool]] = []
-
-    def stage(_: object, name: str, *, full: bool, device: str) -> dict[str, object]:
-        assert device == "mps"
-        calls.append((name, full))
-        return {"results_available": False}
-
-    namespace: dict[str, Any] = {
-        "ROOT": tmp_path,
-        "config": SimpleNamespace(sha256="matching-config"),
-        "RUN_FULL_EXPERIMENT": False,
-        "device": "mps",
-        "run_stage": stage,
-        "json": json,
-        "show": displays.append,
-        "display": displays.append,
-        "Markdown": lambda value: value,
-        "Image": lambda *, filename, width: {"filename": filename, "width": width},
-    }
-    exec(compile(cell.source, "feature-notebook-cell", "exec"), namespace)
-    assert calls == [("represent", False)]
-    assert {"filename": str(image.resolve()), "width": 1200} in displays
-    assert any("local-only" in str(item) for item in displays)
-    assert not any("pca" in str(item).lower() for item in displays)
-
-
-@pytest.mark.parametrize("stale_kind", ["altered-bytes", "missing-file", "missing-hash"])
-def test_feature_cell_does_not_display_stale_image_bytes(tmp_path: Path, stale_kind: str) -> None:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)  # type: ignore[no-untyped-call]
-    cell = next(cell for cell in notebook.cells if cell.id == "run-features")
-    results = tmp_path / "results/generated"
-    results.mkdir(parents=True)
-    image = tmp_path / "figures/channel.png"
-    image.parent.mkdir()
-    image.write_bytes(b"verified original image")
-    figure: dict[str, Any] = {
-        "path": "figures/channel.png",
-        "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
-        "caption": "Saved feature",
-        "shareable": False,
-        "arm": "standard",
-        "kind": "activation map",
-    }
-    if stale_kind == "altered-bytes":
-        image.write_bytes(b"unverified replacement image")
-    elif stale_kind == "missing-file":
-        image.unlink()
-    else:
-        del figure["sha256"]
-    (results / "feature_visualizations.json").write_text(
-        json.dumps(
-            {
-                "config_sha256": "matching-config",
-                "created_at": "saved-time",
-                "figures": [figure],
-                "limitations": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    messages: list[object] = []
-    displays: list[object] = []
-    namespace: dict[str, Any] = {
-        "ROOT": tmp_path,
-        "config": SimpleNamespace(sha256="matching-config"),
-        "RUN_FULL_EXPERIMENT": False,
-        "device": "mps",
-        "run_stage": lambda *args, **kwargs: {"results_available": False},
-        "json": json,
-        "show": messages.append,
-        "display": displays.append,
-        "Markdown": lambda value: value,
-        "Image": lambda *, filename, width: {"filename": filename, "width": width},
-    }
-    exec(compile(cell.source, "feature-notebook-cell", "exec"), namespace)
-    stale_messages = [
-        message
-        for message in messages
-        if isinstance(message, dict) and message.get("status") == "stale feature evidence"
+def test_owner_notebook_remains_valid_with_or_without_saved_execution() -> None:
+    notebook = nbformat.read(NOTEBOOK, as_version=4)
+    nbformat.validate(notebook)
+    assert notebook.metadata.kernelspec.name == "oxford-pets-adversarial-representations"
+    assert next(cell for cell in notebook.cells if cell.id == "setup").metadata.tags == [
+        "parameters"
     ]
-    assert len(stale_messages) == 1
-    assert stale_messages[0]["figure"] == "figures/channel.png"
-    assert not any(isinstance(value, dict) and "filename" in value for value in displays)
+    identifiers = [cell.id for cell in notebook.cells]
+    assert len(identifiers) == len(set(identifiers))
+    for cell in notebook.cells:
+        if cell.cell_type == "code":
+            ast.parse(cell.source)
+            assert cell.execution_count is None or isinstance(cell.execution_count, int)
+            assert isinstance(cell.outputs, list)
 
 
-def test_feature_cell_rejects_stale_evidence_without_running_model(tmp_path: Path) -> None:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)  # type: ignore[no-untyped-call]
-    cell = next(cell for cell in notebook.cells if cell.id == "run-features")
-    results = tmp_path / "results" / "generated"
-    results.mkdir(parents=True)
-    (results / "feature_visualizations.json").write_text(
-        json.dumps({"config_sha256": "superseded-breed-config", "figures": []}),
-        encoding="utf-8",
+def test_generated_explanations_are_plain_and_avoid_permanent_pending_claim() -> None:
+    notebook = build_notebook.make_notebook()
+    text = "\n".join(cell.source for cell in notebook.cells if cell.cell_type == "markdown")
+    assert (
+        "Fresh results are pending" not in text
+        and "Keep this tracked guide output-free" not in text
     )
-    namespace: dict[str, Any] = {
-        "ROOT": tmp_path,
-        "config": SimpleNamespace(sha256="new-species-config"),
-        "RUN_FULL_EXPERIMENT": False,
-        "device": "mps",
-        "run_stage": lambda *args, **kwargs: {"results_available": False},
-        "json": json,
-        "show": lambda value: None,
-    }
-    with pytest.raises(RuntimeError, match="different configuration"):
-        exec(compile(cell.source, "feature-notebook-cell", "exec"), namespace)
+    for phrase in (
+        "small pattern tester",
+        "512 summary numbers",
+        "not trained from scratch",
+        "does not mean the filter is useless",
+        "which tiny pixel changes",
+        "Red/positive",
+        "Blue/negative",
+        "correlation undefined",
+        "first fixed cat and first fixed dog",
+        "All four anchors",
+    ):
+        assert phrase in text
 
 
-def test_feature_cell_without_saved_evidence_is_read_only_and_explicit(tmp_path: Path) -> None:
-    notebook = nbformat.read(NOTEBOOK, as_version=4)  # type: ignore[no-untyped-call]
-    cell = next(cell for cell in notebook.cells if cell.id == "run-features")
-    messages: list[object] = []
-    calls: list[tuple[str, bool]] = []
-    unavailable = {
-        "stage": "represent",
-        "status": "skipped in safe mode",
-        "results_available": False,
-    }
+def test_factory_is_safe_by_default_and_never_reads_historical_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        build_notebook, "ROOT", Path("/nonexistent-historical-checkout"), raising=True
+    )
+    notebook = build_notebook.make_notebook()
+    code = [cell for cell in notebook.cells if cell.cell_type == "code"]
+    assert "RUN_FULL_EXPERIMENT = False" in code[0].source
+    assert all(cell.outputs == [] and cell.execution_count is None for cell in code)
+    assert not hasattr(build_notebook, "_public_preview_cells")
 
-    def stage(_: object, name: str, *, full: bool, device: str) -> dict[str, object]:
-        assert device == "mps"
-        calls.append((name, full))
-        return unavailable
 
-    namespace: dict[str, Any] = {
-        "ROOT": tmp_path,
-        "config": SimpleNamespace(sha256="new-species-config"),
-        "RUN_FULL_EXPERIMENT": False,
+@pytest.mark.parametrize("run_full", [False, True])
+def test_builder_preserves_owner_parameters_kernel_and_clears_outputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_full: bool
+) -> None:
+    path = tmp_path / "notebooks/cat_dog_cnn_features.ipynb"
+    path.parent.mkdir()
+    existing = build_notebook.make_notebook(run_full=run_full)
+    existing.metadata.kernelspec.display_name = "Owner's selected kernel"
+    existing.metadata.language_info.version = "3.13.15-owner"
+    existing.cells[1].execution_count = 4
+    existing.cells[1].outputs = [nbformat.v4.new_output("stream", name="stdout", text="old run")]
+    nbformat.write(existing, path)
+    monkeypatch.setattr(build_notebook, "ROOT", tmp_path)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        build_notebook.subprocess,
+        "run",
+        lambda arguments, **_: commands.append(arguments),
+    )
+    assert build_notebook.build() == path
+    rebuilt = nbformat.read(path, as_version=4)
+    assert f"RUN_FULL_EXPERIMENT = {run_full}" in rebuilt.cells[1].source
+    assert rebuilt.metadata.kernelspec == existing.metadata.kernelspec
+    assert rebuilt.metadata.language_info == existing.metadata.language_info
+    assert all(cell.outputs == [] for cell in rebuilt.cells if cell.cell_type == "code")
+    assert len(commands) == 3 and all("ruff" in command for command in commands)
+
+
+def test_builder_explicitly_preserves_owner_outputs_and_metadata_by_cell_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "notebooks/cat_dog_cnn_features.ipynb"
+    path.parent.mkdir()
+    existing = build_notebook.make_notebook(run_full=True)
+    existing.metadata["owner_note"] = {"run": "keep this execution"}
+    setup = next(cell for cell in existing.cells if cell.id == "setup")
+    setup.metadata["execution"] = {"iopub.execute_input": "owner timestamp"}
+    setup.execution_count = 11
+    setup.outputs = [
+        nbformat.v4.new_output(
+            "display_data",
+            data={"text/plain": "saved response"},
+            metadata={"owner_display": "unchanged"},
+        )
+    ]
+    feature = next(cell for cell in existing.cells if cell.id == "run-feature-stages")
+    feature.execution_count = 17
+    feature.outputs = [nbformat.v4.new_output("stream", name="stdout", text="measured run")]
+    existing.cells.reverse()  # Matching IDs, not positions, must preserve the right outputs.
+    nbformat.write(existing, path)
+    monkeypatch.setattr(build_notebook, "ROOT", tmp_path)
+    monkeypatch.setattr(build_notebook.subprocess, "run", lambda *_, **__: None)
+
+    assert build_notebook.build(preserve_outputs=True) == path
+    rebuilt = nbformat.read(path, as_version=4)
+    preserved_setup = next(cell for cell in rebuilt.cells if cell.id == "setup")
+    preserved_feature = next(cell for cell in rebuilt.cells if cell.id == "run-feature-stages")
+    assert "RUN_FULL_EXPERIMENT = True" in preserved_setup.source
+    assert rebuilt.metadata == existing.metadata
+    assert preserved_setup.metadata == setup.metadata
+    assert preserved_setup.execution_count == 11 and preserved_setup.outputs == setup.outputs
+    assert preserved_feature.execution_count == 17 and preserved_feature.outputs == feature.outputs
+    assert "compact=True" in preserved_feature.source
+    assert next(cell for cell in rebuilt.cells if cell.id == "run-feature-kernels").outputs == []
+
+
+def test_only_setup_training_feature_and_report_stages_are_present() -> None:
+    notebook = build_notebook.make_notebook()
+    calls: list[tuple[str, str | None]] = []
+    for cell in notebook.cells:
+        if cell.cell_type != "code":
+            continue
+        for node in ast.walk(ast.parse(cell.source)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "run_stage"
+            ):
+                stage = cast(ast.Constant, node.args[1]).value
+                sections = [keyword.value for keyword in node.keywords if keyword.arg == "section"]
+                if stage == "represent":
+                    assert len(sections) == 1 and isinstance(sections[0], ast.Constant)
+                calls.append((stage, cast(ast.Constant, sections[0]).value if sections else None))
+    assert calls == [
+        ("setup", None),
+        ("train", None),
+        ("train", None),
+        *(("represent", section) for section in FEATURE_SECTIONS),
+        ("report", None),
+    ]
+    ids = [cell.id for cell in notebook.cells]
+    assert ids.index("prepare-data") < ids.index("inspect-data") < ids.index("train-standard")
+    assert ids.index("feature-walkthrough") < ids.index("run-feature-activations")
+    assert ids.index("run-feature-activations") < ids.index("prediction-influence")
+    assert ids.index("prediction-influence") < ids.index("run-feature-gradcam")
+    assert not any(identifier.startswith("run-evaluation") for identifier in ids)
+
+
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("section", FEATURE_SECTIONS)
+def test_feature_cells_compute_and_display_only_their_own_family(full: bool, section: str) -> None:
+    config = object()
+    events: list[tuple[Any, ...]] = []
+    result = {"section": section}
+
+    def stage(value: Any, name: str, *, full: bool, device: str, section: str) -> Any:
+        assert value is config and name == "represent" and device == "mps"
+        events.append(("compute", section, full))
+        return result
+
+    def figures(value: Any, *, section: str, compact: bool) -> None:
+        assert value is config and compact is True
+        events.append(("display", section))
+
+    namespace = {
+        "config": config,
+        "RUN_FULL_EXPERIMENT": full,
         "device": "mps",
         "run_stage": stage,
-        "json": json,
-        "show": messages.append,
+        "display_features": figures,
     }
-    exec(compile(cell.source, "feature-notebook-cell", "exec"), namespace)
-    assert messages == [unavailable]
-    assert calls == [("represent", False)]
-    assert list(tmp_path.iterdir()) == []
+    cell = _cell(f"run-feature-{section}")
+    exec(compile(cell.source, "feature-cell", "exec"), namespace)
+    assert namespace[f"feature_{section}_result"] is result
+    assert events == [("compute", section, full), ("display", section)]
+    assert "Image(" not in cell.source and "docs/assets" not in cell.source
+
+
+def test_safe_display_does_not_hide_stale_evidence() -> None:
+    def reject(*_: Any, **__: Any) -> None:
+        raise ValueError("stale method/model/image identity")
+
+    namespace = {
+        "config": object(),
+        "RUN_FULL_EXPERIMENT": False,
+        "device": "mps",
+        "run_stage": lambda *_, **__: {"status": "skipped"},
+        "display_features": reject,
+    }
+    with pytest.raises(ValueError, match="stale method/model/image identity"):
+        exec(compile(_cell("run-feature-stages").source, "feature-cell", "exec"), namespace)
+
+
+@pytest.mark.parametrize("section", FEATURE_SECTIONS)
+def test_notebook_facade_dispatches_only_selected_feature_family(
+    monkeypatch: pytest.MonkeyPatch, section: str
+) -> None:
+    monkeypatch.setattr("src.notebook_support.require_project_environment", lambda: None)
+    monkeypatch.setattr("src.notebook_support.require_device", lambda requested: requested)
+    calls: list[str] = []
+
+    def selected(config: Any, device: Any, *, progress: bool, section: str) -> object:
+        calls.append(section)
+        return section
+
+    monkeypatch.setattr("src.feature_visualization.visualize_features", selected)
+    assert (
+        run_stage(
+            load_config(CONFIG),
+            "represent",
+            full=True,
+            device="mps",
+            progress=False,
+            section=cast(Any, section),
+        )
+        == section
+    )
+    assert calls == [section]
+
+
+@pytest.mark.parametrize("full", [False, True])
+@pytest.mark.parametrize("arm", ["standard", "adversarial"])
+def test_training_cells_use_compact_live_charts_without_gallery(arm: str, full: bool) -> None:
+    config = object()
+    observer = object()
+    events: list[tuple[Any, ...]] = []
+
+    def factory(value: Any, *, compact: bool) -> object:
+        assert value is config and compact is True
+        events.append(("observer",))
+        return observer
+
+    def stage(
+        value: Any, name: str, *, full: bool, device: str, arm: str, epoch_observer: Any
+    ) -> dict[str, Any]:
+        assert value is config and name == "train" and device == "mps"
+        assert epoch_observer is (observer if full else None)
+        events.append(("train", arm, full))
+        return {"status": "complete"}
+
+    def training(value: Any, selected: str, *, compact: bool, summary_only: bool) -> None:
+        assert value is config and compact is True and summary_only is full
+        events.append(("display", selected))
+
+    namespace = {
+        "config": config,
+        "RUN_FULL_EXPERIMENT": full,
+        "device": "mps",
+        "run_stage": stage,
+        "training_observer": factory,
+        "display_training": training,
+    }
+    exec(compile(_cell(f"train-{arm}").source, "training-cell", "exec"), namespace)
+    assert events == [*([("observer",)] if full else []), ("train", arm, full), ("display", arm)]
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_setup_cell_runs_only_setup(full: bool, capsys: pytest.CaptureFixture[str]) -> None:
+    calls: list[str] = []
+
+    def stage(config: Any, name: str, **_: Any) -> dict[str, str]:
+        calls.append(name)
+        return {"status": "setup"}
+
+    namespace = {
+        "config": object(),
+        "RUN_FULL_EXPERIMENT": full,
+        "device": "mps",
+        "run_stage": stage,
+    }
+    exec(compile(_cell("prepare-data").source, "setup-cell", "exec"), namespace)
+    assert calls == ["setup"]
+    output = capsys.readouterr().out
+    assert ("Dataset manifests prepared." if full else "Setup skipped in safe mode.") in output
+
+
+def test_data_cell_displays_only_counts_and_one_balance_chart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    (artifact_root / "data").mkdir(parents=True)
+    (artifact_root / "data/manifest.json").write_text("{}", encoding="utf-8")
+
+    class Config:
+        def project_path(self, name: str) -> Path:
+            assert name == "artifacts"
+            return artifact_root
+
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        "src.eda.generate_eda",
+        lambda _: {"figures": {"split_and_species": "balance.png", "ignored": "other.png"}},
+    )
+    summary = {"training": 2649, "validation": 295, "calibration": 736, "official_test": 3669}
+    namespace = {
+        "config": Config(),
+        "ROOT": tmp_path,
+        "inspect_data": lambda _: {**summary, "attack_subset": 200, "hash": "do-not-dump"},
+        "Markdown": lambda text: ("markdown", text),
+        "Image": lambda **kwargs: ("image", kwargs),
+        "display": calls.append,
+    }
+    exec(compile(_cell("inspect-data").source, "data-cell", "exec"), namespace)
+    assert len(calls) == 2 and calls[0][0] == "markdown" and calls[1][0] == "image"
+    assert all(str(value) in calls[0][1] for value in summary.values())
+    assert "do-not-dump" not in calls[0][1] and "attack_subset" not in calls[0][1]
+    assert calls[1][1]["filename"] == str(tmp_path / "balance.png")
+
+
+def test_missing_data_is_explicit_without_computation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Config:
+        def project_path(self, _: str) -> Path:
+            return tmp_path
+
+    def forbid(*_: Any, **__: Any) -> None:
+        pytest.fail("missing data must not generate an EDA substitute")
+
+    monkeypatch.setattr("src.eda.generate_eda", forbid)
+    messages: list[str] = []
+    namespace = {
+        "config": Config(),
+        "ROOT": tmp_path,
+        "inspect_data": forbid,
+        "Markdown": lambda text: text,
+        "display": messages.append,
+    }
+    exec(compile(_cell("inspect-data").source, "data-cell", "exec"), namespace)
+    assert messages == ["Data unavailable. Run the setup cell in full mode first."]
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_report_cell_has_no_evaluation_prerequisite(full: bool) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    def stage(value: Any, name: str, *, full: bool, device: str) -> dict[str, str]:
+        assert name == "report" and device == "mps"
+        calls.append((name, full))
+        return {"status": "report"}
+
+    namespace = {
+        "config": object(),
+        "RUN_FULL_EXPERIMENT": full,
+        "device": "mps",
+        "run_stage": stage,
+        "display_report": lambda _, *, compact: calls.append(("display-report", compact)),
+    }
+    exec(compile(_cell("run-report").source, "report-cell", "exec"), namespace)
+    assert calls == [("report", full), ("display-report", True)]
 
 
 def test_readme_project_links_are_repository_local_and_resolve() -> None:
@@ -342,34 +421,32 @@ def test_readme_project_links_are_repository_local_and_resolve() -> None:
     targets = re.findall(r"\[[^]]+\]\(([^)]+)\)", readme)
     assert targets
     for target in targets:
-        assert "://" not in target
-        assert not target.startswith(("/", ".."))
-        local = target.split("#", maxsplit=1)[0]
-        assert (ROOT / local).exists(), target
-    assert "Instructions/checklist.md" not in readme
-    assert "/Users/" not in readme
+        assert "://" not in target and not target.startswith(("/", ".."))
+        assert (ROOT / target.split("#", maxsplit=1)[0]).exists(), target
+    assert "Instructions/checklist.md" not in readme and "/Users/" not in readme
+    assert "99.37%" not in readme and "67.76%" not in readme
+    assert "99.66%" in readme and "67.80%" in readme
+    assert "docs/assets/validation-monitoring-comparison.png" in readme
 
 
-def test_safe_mode_never_invokes_a_scientific_stage() -> None:
+def test_safe_mode_skips_active_stages_without_loading_models() -> None:
     config = load_config(CONFIG)
-    stages: list[tuple[NotebookStage, str | None]] = [
-        ("preflight", None),
-        ("train", "standard"),
-        ("train", "adversarial"),
-        ("evaluate", None),
-        ("represent", None),
-        ("report", None),
-    ]
-    for stage, arm in stages:
+    for stage, arm, section in [
+        ("setup", None, None),
+        ("train", "standard", None),
+        ("train", "adversarial", None),
+        *(("represent", None, section) for section in FEATURE_SECTIONS),
+        ("report", None, None),
+    ]:
         result = run_stage(
             config,
-            stage,
+            cast(Any, stage),
             full=False,
             device="mps",
             arm=cast(Any, arm),
             progress=False,
+            section=cast(Any, section),
         )
-        assert isinstance(result, dict)
         assert result == {
             "stage": stage,
             "status": "skipped in safe mode",
@@ -386,21 +463,16 @@ def test_notebook_override_and_interpreter_guard(
     monkeypatch.setenv("OXFORD_PETS_NOTEBOOK_RUN_FULL", "1")
     assert notebook_context(full=False)[1] is True
     monkeypatch.delenv("OXFORD_PETS_NOTEBOOK_RUN_FULL")
-    assert notebook_context(full=True)[1] is True
-    assert notebook_context()[1] is False
-
+    assert notebook_context(full=True)[1] is True and notebook_context()[1] is False
     monkeypatch.setattr("src.notebook_support.sys.prefix", str(tmp_path / "sibling/.venv"))
     with pytest.raises(RuntimeError, match="Wrong notebook interpreter"):
         require_project_environment()
 
 
-def test_headless_runner_uses_calling_interpreter() -> None:
+def test_headless_runner_uses_calling_interpreter_and_direct_entrypoint() -> None:
     specification = CallingKernelSpecs().get_kernel_spec("ignored")
     assert specification.argv[0] == sys.executable
     assert specification.argv[1:3] == ["-m", "ipykernel_launcher"]
-
-
-def test_headless_runner_is_a_direct_script_entrypoint() -> None:
     result = subprocess.run(
         [sys.executable, "src/notebook_runner.py", "--help"],
         cwd=ROOT,
@@ -408,8 +480,7 @@ def test_headless_runner_is_a_direct_script_entrypoint() -> None:
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stderr
-    assert "--full" in result.stdout
+    assert result.returncode == 0 and "--full" in result.stdout
 
 
 def test_nested_notebook_progress_has_no_terminal_controls(
@@ -431,26 +502,29 @@ def test_nested_notebook_progress_has_no_terminal_controls(
             for _ in tqdm(range(3), desc=f"epoch {epoch + 1}", leave=False, mininterval=0):
                 pass
             epochs.update()
-            epochs.set_postfix(loss="0.5", selected=epoch + 1)
-    assert isinstance(epochs, NotebookProgress)
-    assert epochs.n == 2
+    assert isinstance(epochs, NotebookProgress) and epochs.n == 2
     assert any('aria-label="standard epochs"' in html and 'value="2"' in html for html in rendered)
-    assert any("selected=2" in html for html in rendered)
     output = capsys.readouterr()
-    assert output.out == ""
-    assert output.err == ""
+    assert output.out == "" and output.err == ""
     assert all("\x1b" not in html and "\r" not in html for html in rendered)
+
+
+def test_notebook_progress_does_not_publish_from_tqdm_monitor_thread() -> None:
+    assert NotebookProgress.monitor_interval == 0
+    assert NotebookProgress._instances is not TerminalProgress._instances
 
 
 def test_notebook_stack_and_kernel_registration_are_pinned() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
-    assert "jupyterlab==4.5.0" in requirements
-    assert "ipykernel==7.0.1" in requirements
-    assert "nbclient==0.10.2" in requirements
-    assert "nbformat==5.10.4" in requirements
+    for requirement in (
+        "jupyterlab==4.5.0",
+        "ipykernel==7.0.1",
+        "nbclient==0.10.2",
+        "nbformat==5.10.4",
+    ):
+        assert requirement in requirements
     setup = (ROOT / "setup_venv.sh").read_text(encoding="utf-8")
-    assert "oxford-pets-adversarial-representations" in setup
-    assert "ipykernel install" in setup
+    assert "oxford-pets-adversarial-representations" in setup and "ipykernel install" in setup
 
 
 def test_source_hash_includes_notebook_sources(tmp_path: Path) -> None:

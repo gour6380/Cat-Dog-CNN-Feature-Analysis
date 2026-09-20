@@ -22,12 +22,27 @@ from src.data import SampleRecord, load_registered_splits
 from src.io_utils import atomic_write_bytes, atomic_write_json, sha256_file, utc_now
 from src.progress import status, tqdm
 
-LogicalSplit = Literal["training", "calibration", "test"]
+LogicalSplit = Literal["training", "validation", "calibration", "test"]
 Orientation = Literal["portrait", "square", "landscape"]
 PRIMARY_SPLITS: tuple[LogicalSplit, ...] = ("training", "calibration", "test")
 ORIENTATIONS: tuple[Orientation, ...] = ("portrait", "square", "landscape")
 SPECIES_NAMES = {0: "cat", 1: "dog"}
 EDA_SCHEMA_VERSION = 1
+
+
+def _primary_splits(splits: Mapping[str, Any]) -> tuple[LogicalSplit, ...]:
+    return (
+        ("training", "validation", "calibration", "test")
+        if "validation" in splits
+        else PRIMARY_SPLITS
+    )
+
+
+def _dimension_splits(dimensions: Sequence[ImageDimension]) -> tuple[LogicalSplit, ...]:
+    names = {item.split for item in dimensions}
+    return tuple(
+        name for name in ("training", "validation", "calibration", "test") if name in names
+    )
 
 
 class EDAError(RuntimeError):
@@ -71,13 +86,14 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
     per_split_labels: dict[str, Counter[int]] = {}
     per_split_breeds: dict[str, Counter[str]] = {}
     breed_species: dict[str, int] = {}
+    primary_splits = _primary_splits(splits)
     species_targets = classes == 2 and all(
         record.label == record.species
-        for split in PRIMARY_SPLITS
+        for split in primary_splits
         for record in _records_for(splits, split)
     )
 
-    for split in PRIMARY_SPLITS:
+    for split in primary_splits:
         records = _records_for(splits, split)
         counts_by_split[split] = len(records)
         species_counts: Counter[int] = Counter()
@@ -118,14 +134,14 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
             "class_id": label,
             "breed": label_names[label],
             "species": SPECIES_NAMES[label_species[label]],
-            **{split: per_split_labels[split][label] for split in PRIMARY_SPLITS},
+            **{split: per_split_labels[split][label] for split in primary_splits},
         }
-        row["total"] = sum(per_split_labels[split][label] for split in PRIMARY_SPLITS)
+        row["total"] = sum(per_split_labels[split][label] for split in primary_splits)
         target_counts.append(row)
 
     breed_counts: list[dict[str, Any]] = []
     for index, breed in enumerate(sorted(breed_species)):
-        counts: dict[str, int] = {split: per_split_breeds[split][breed] for split in PRIMARY_SPLITS}
+        counts: dict[str, int] = {split: per_split_breeds[split][breed] for split in primary_splits}
         breed_counts.append(
             {
                 "class_id": index,
@@ -138,6 +154,7 @@ def summarize_records(splits: Mapping[str, Sequence[SampleRecord]], classes: int
     breeds_by_species = Counter(SPECIES_NAMES[value] for value in breed_species.values())
     return {
         "total_unique_images": len(seen_ids),
+        "primary_splits": list(primary_splits),
         "classes": classes,
         "counts_by_split": counts_by_split,
         "species_by_split": species_by_split,
@@ -153,7 +170,11 @@ def read_image_dimensions(
 ) -> list[ImageDimension]:
     """Read only image headers; original pixels are never copied into EDA artifacts."""
 
-    queued = [(split, record) for split in PRIMARY_SPLITS for record in _records_for(splits, split)]
+    queued = [
+        (split, record)
+        for split in _primary_splits(splits)
+        for record in _records_for(splits, split)
+    ]
     dimensions: list[ImageDimension] = []
     for split, record in tqdm(
         queued,
@@ -226,7 +247,7 @@ def summarize_dimensions(dimensions: Sequence[ImageDimension]) -> dict[str, Any]
         "overall": one_group(dimensions),
         "by_split": {
             split: one_group([item for item in dimensions if item.split == split])
-            for split in PRIMARY_SPLITS
+            for split in _dimension_splits(dimensions)
         },
     }
 
@@ -239,8 +260,13 @@ def _save_figure(figure: Any, destination: Path) -> None:
 
 
 def _plot_split_and_species(summary: dict[str, Any], destination: Path) -> None:
-    colors = {"training": "#2563eb", "calibration": "#f59e0b", "test": "#0f766e"}
-    splits = list(PRIMARY_SPLITS)
+    colors = {
+        "training": "#2563eb",
+        "validation": "#7c3aed",
+        "calibration": "#f59e0b",
+        "test": "#0f766e",
+    }
+    splits = summary.get("primary_splits", list(PRIMARY_SPLITS))
     counts = cast(dict[str, int], summary["counts_by_split"])
     species = cast(dict[str, dict[str, int]], summary["species_by_split"])
     figure, axes = plt.subplots(1, 2, figsize=(13, 5.4), constrained_layout=True)
@@ -299,15 +325,25 @@ def _plot_breed_balance(summary: dict[str, Any], destination: Path) -> None:
     species_targets = summary["label_mode"] == "species"
     names = [str(row["breed"]).replace("_", " ") for row in rows]
     training = np.asarray([row["training"] for row in rows], dtype=np.int64)
+    validation = np.asarray([row.get("validation", 0) for row in rows], dtype=np.int64)
     calibration = np.asarray([row["calibration"] for row in rows], dtype=np.int64)
     test = np.asarray([row["test"] for row in rows], dtype=np.int64)
     positions = np.arange(len(rows))
     figure, axis = plt.subplots(figsize=(14, 4 if species_targets else 12), constrained_layout=True)
     axis.barh(positions - 0.18, training, height=0.34, color="#2563eb", label="training")
+    if "validation" in summary.get("primary_splits", []):
+        axis.barh(
+            positions - 0.18,
+            validation,
+            left=training,
+            height=0.34,
+            color="#7c3aed",
+            label="validation",
+        )
     axis.barh(
         positions - 0.18,
         calibration,
-        left=training,
+        left=training + validation,
         height=0.34,
         color="#f59e0b",
         label="calibration",
@@ -346,11 +382,17 @@ def _plot_image_geometry(dimensions: Sequence[ImageDimension], destination: Path
     axes[0].legend()
     figure.colorbar(density, ax=axes[0], label="log image count")
 
-    split_colors = {"training": "#2563eb", "calibration": "#f59e0b", "test": "#0f766e"}
+    split_colors = {
+        "training": "#2563eb",
+        "validation": "#7c3aed",
+        "calibration": "#f59e0b",
+        "test": "#0f766e",
+    }
+    primary_splits = _dimension_splits(dimensions)
     low = max(0.0, float(np.quantile(widths / heights, 0.005)))
     high = float(np.quantile(widths / heights, 0.995))
     bins = np.linspace(low, high, 36)
-    for split in PRIMARY_SPLITS:
+    for split in primary_splits:
         values = [item.aspect_ratio for item in dimensions if item.split == split]
         axes[1].hist(
             values,
@@ -367,15 +409,15 @@ def _plot_image_geometry(dimensions: Sequence[ImageDimension], destination: Path
     axes[1].grid(alpha=0.15)
 
     orientation_colors = ("#7c3aed", "#64748b", "#ea580c")
-    bottoms = np.zeros(len(PRIMARY_SPLITS), dtype=np.float64)
+    bottoms = np.zeros(len(primary_splits), dtype=np.float64)
     for orientation, color in zip(ORIENTATIONS, orientation_colors, strict=True):
         shares = []
-        for split in PRIMARY_SPLITS:
+        for split in primary_splits:
             selected = [item for item in dimensions if item.split == split]
             shares.append(
                 sum(item.orientation == orientation for item in selected) / len(selected) * 100.0
             )
-        axes[2].bar(PRIMARY_SPLITS, shares, bottom=bottoms, color=color, label=orientation)
+        axes[2].bar(primary_splits, shares, bottom=bottoms, color=color, label=orientation)
         bottoms += np.asarray(shares)
     axes[2].set(title="Orientation composition", ylabel="share of split (%)", ylim=(0, 100))
     axes[2].legend(loc="upper right")
@@ -434,6 +476,15 @@ def generate_eda(
 
     status("EDA: summarizing splits, breeds, species, and image geometry...", enabled=progress)
     splits = load_registered_splits(config)
+    from src.training_monitoring import prepare_training_monitoring, training_monitoring_enabled
+
+    if training_monitoring_enabled(config):
+        protocol = prepare_training_monitoring(config, splits)
+        splits = {
+            **splits,
+            "training": protocol.fit_records,
+            "validation": protocol.validation_records,
+        }
     record_summary = summarize_records(splits, config.integer("dataset", "classes"))
     dimensions = read_image_dimensions(splits, progress=progress)
     dimension_summary = summarize_dimensions(dimensions)

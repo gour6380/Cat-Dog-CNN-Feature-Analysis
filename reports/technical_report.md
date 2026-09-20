@@ -1,163 +1,111 @@
-# Technical report: cat and dog CNN feature learning and localization
+# Cat/Dog CNN feature learning: technical report
 
-Fixed evidence snapshot completed on 2026-09-17T17:45:29+05:30.
+## Question
 
-## Clean species predictions and failure status
+What do low-, middle- and high-level ResNet-18 channels respond to, where do those
+responses occur in clean pet images, and which regions influence a Cat/Dog score? The
+study compares standard clean training with pure PGD-5 training under the same
+initialization, fitting records, sample order, augmentations, update count and schedule.
 
-> adversarial arm — WARNING: this arm predicts only dog on all 3669 clean test images (macro accuracy 50%). Nominal attack survival must not be presented as useful robust cat/dog recognition. This is a classifier prediction failure, not proof that all hidden features are constant.
+## Protocol
 
-| Arm | True cats | True dogs | Predicted cats | Predicted dogs | Cat recall | Dog recall | Macro accuracy | Clean-test status |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| standard | 1183 | 2486 | 1186 | 2483 | 99.15% | 99.48% | 99.32% | Both species predicted; robustness not inferred |
-| adversarial | 1183 | 2486 | 0 | 3669 | 0.00% | 100.00% | 50.00% | FAILED comparison: single-species prediction |
+- Oxford-IIIT Pet, with breed retained for stratification and `cat=0`, `dog=1` as targets.
+- 2,649 fitting images, 295 held-out validation images, 736 reference images and the
+  untouched 3,669-image official test partition.
+- Two fully fine-tuned ImageNet-initialized ResNet-18 models, fixed epoch 15.
+- Float32 PyTorch MPS on an M2 Pro; micro-batch 16 with two-step accumulation; AdamW.
+- Standard objective: clean augmented cross-entropy.
+- Adversarial objective: pure untargeted PGD-5 cross-entropy, L∞ `4/255`, step `1/255`,
+  random start and clipping in `[0,1]`.
+- Identical initialization and 1,245 optimizer updates per arm. Validation never selected
+  or stopped a checkpoint.
 
-A single-species arm is retained as a failed comparison, not useful robust cat/dog recognition. Its channel and attribution pictures are failure diagnostics. Hidden features may remain variable even when all observed clean decisions select one species; the cause of the classifier failure remains unproven.
+The standard run took 14.67 minutes and the PGD run 30.95 minutes in their recorded
+invocations. Machine runtime is not a focused-work estimate.
 
+## Main result: the comparison failed
 
-## Question and scope
+| Clean validation at epoch 15 | Standard | PGD-trained |
+|---|---:|---:|
+| Correct | 294/295 | 200/295 |
+| Overall accuracy | 99.66% | 67.80% |
+| Macro accuracy | 99.75% | 50.00% |
+| Cat recall | 100% | 0% |
+| Dog recall | 99.5% | 100% |
+| Predictions: cat / dog | 96 / 199 | 0 / 295 |
 
-What patterns activate early, middle, and late CNN channels, and where do the selected
-channels and cat/dog classifier respond within actual images? This is a two-class species
-study, not a 37-breed projection study. Breed metadata remains available and the official
-trainval partition is split within each breed; the official test partition stays untouched.
+The PGD model predicted every validation image as dog. Its final fitting-objective
+accuracy, 67.72%, exactly matches the dog proportion in the fitting partition; its loss,
+0.6307 nats, is also close to the class-prior entropy of 0.6289 nats. The evidence is
+consistent with a majority-class rule rather than balanced species discrimination.
 
-Both ResNet-18 arms start from identical ImageNet tensors and an identical new binary head.
-The standard arm trains on clean inputs; the adversarial arm trains on bounded PGD inputs.
-These are fixed epoch-15 checkpoints, not test-selected
-checkpoints.
+This is not an adversarial-robustness result. The active workflow did not evaluate the
+fixed checkpoints under post-training attacks, corruptions or the official test set.
+The scoped conclusion is that this exact pure-PGD-5 recipe failed on the imbalanced
+binary task.
 
-## Classification and finite attacks
+## Feature evidence
 
-The clean attack-subset accuracy and FGSM/PGD robust accuracies below use the same
-200
-hash-selected test images, balanced by target species. The full official test contains
-3669 images and its accuracy is reported separately.
+All eight registered feature families completed for both checkpoints: stage
+walkthroughs, actual first-layer kernels, activation-maximization stimuli, strongest
+reference patches, clean activation/input-gradient maps, Grad-CAM, occlusion and
+randomized-weight diagnostics. Channel selection used 64 balanced reference images;
+four hash-selected test anchors supplied descriptive walkthroughs.
 
-| Arm | Clean subset | FGSM robust | PGD-20×5 robust | PGD success among clean-correct |
-|---|---:|---:|---:|---:|
-| standard | 99.50% | 17.50% | 0.00% | 100.00% |
-| adversarial | 50.00% | 50.00% | 50.00% | 0.00% |
+Observed diagnostics:
 
-PGD-20×5 is finite untargeted `L∞` search with
-`epsilon=0.015686275`. Attack success is measured among
-clean-correct samples. The search is not certified, physical, or unrestricted robustness.
+- The standard model predicted all four anchors correctly. The PGD model predicted dog
+  for all four, including both cat anchors.
+- All six PGD-selected late-layer channels had higher mean dog than cat response on the
+  balanced reference set. Standard late-layer selections separated in both directions.
+  This is consistent with the classifier failure, not proof of its cause.
+- Four of 18 PGD synthetic-optimization trials had zero measured gain; all four are
+  retained. They do not establish dead channels because those channels responded to
+  real reference images.
+- Masking the standard model's top Grad-CAM tiles reduced the true-class margin more
+  than random equal-area masks for all four anchors. PGD effects were small or
+  inconsistent. Four anchors cannot support a population claim.
 
-## Hierarchical feature diagnostics
+## Interpretation
 
-| Arm | Layer | Spatial grid | Receptive field (px) | Selected channels | Mean response change vs initialization |
-|---|---|---:|---:|---|---:|
-| standard | `network.layer2` | 28×28 | 99 | 115, 91, 23, 62, 69, 71 | 0.0288 |
-| standard | `network.layer4` | 7×7 | 435 | 417, 245, 17, 345, 186, 46 | 0.3294 |
-| standard | `network.relu` | 112×112 | 7 | 24, 49, 39, 63, 10, 59 | 0.0249 |
-| adversarial | `network.layer2` | 28×28 | 99 | 62, 71, 73, 91, 23, 124 | -0.0795 |
-| adversarial | `network.layer4` | 7×7 | 435 | 491, 418, 133, 199, 47, 61 | -0.2562 |
-| adversarial | `network.relu` | 112×112 | 7 | 49, 63, 20, 51, 10, 60 | 0.0209 |
+A feature picture answers a narrower question than classification metrics. Kernels show
+weights; optimized stimuli show patterns that raise one channel; activation maps show
+where a channel responds; gradients show local sensitivity; Grad-CAM shows coarse
+class-score localization; occlusion measures the effect of an artificial mask. None
+shows which training image taught the feature, and agreement between methods is not
+causal proof.
 
-Channels were selected from clean calibration responses, not test-image appearance.
-First-layer kernels show learned weights. Activation-maximization images are synthetic
-inputs optimized to excite a fixed channel; they are not recovered training photographs.
-Response changes compare the same selected channels on the same calibration images against
-the matched ImageNet initialization. They do not identify a named semantic concept.
-
-### Gray synthetic tiles: zero-gain trials retained
-
-4 of 36 recorded single-start synthetic optimization trials had zero unregularized response gain. Their gray/blank tiles are unsuccessful stimuli, not evidence of dead channels or that the model learned nothing.
-
-| Arm | Layer | Channel | Seeded initial response | Final response | Gain | Real calibration mean: cat | Real calibration mean: dog |
-|---|---|---:|---:|---:|---:|---:|---:|
-| adversarial | `network.layer2` | 73 | 0.0000 | 0.0000 | 0.0000 | 0.1088 | 0.1115 |
-| adversarial | `network.layer4` | 491 | 0.0000 | 0.0000 | 0.0000 | 0.8542 | 0.9773 |
-| adversarial | `network.layer4` | 418 | 0.0000 | 0.0000 | 0.0000 | 0.4555 | 1.4753 |
-| adversarial | `network.layer4` | 61 | 0.0000 | 0.0000 | 0.0000 | 0.4501 | 1.2567 |
-
-These channels respond positively to real calibration images, as shown above. The fixed seeds, selected channels, and optimization budget were preserved; no retry or replacement was used to make the atlas look better. Initial/final responses are measured on unjittered inputs, not the regularized optimization loss.
-
-
-Activation maps locate responses on the transformed input. Highlighted receptive-field
-boxes describe theoretical input support for an activation, not the precise pixels that
-caused it. Later receptive fields can exceed the entire input image.
-
-## Class localization and controls
-
-| Arm | Test anchors | Top-CAM occlusion mean margin drop | Equal-area random occlusion mean margin drop | Mean randomized-model CAM correlation | Defined CAM correlations |
-|---|---:|---:|---:|---:|---:|
-| standard | 4 | 1.8832 | 0.3178 | -0.1613 | 3/4 |
-| adversarial | 4 | 0.0129 | 0.0135 | -0.1233 | 2/4 |
-
-Grad-CAM differentiates the fixed true-species logit, including on classification errors.
-Occlusion measures the true-species-minus-other-species logit margin on the same input:
-these are related but different scalar objectives. Equal-area image regions are replaced,
-comparing high-CAM tiles with deterministic random tiles. A positive drop means the
-intervention reduced the true-species margin. Randomization checks whether CAM changes
-when the trained model is
-randomized. These are limited descriptive diagnostics, not causal proof of what a filter
-learned, not training-source attribution, and not proof that the object is the only cue.
-Constant trained or randomized CAMs have undefined correlation; the mean excludes them
-and the defined-count column makes that omission explicit. Undefined is not zero.
-
-| Arm | Sample | True species | Clean prediction | Clean margin | PGD prediction | PGD margin |
-|---|---|---|---|---:|---|---:|
-| standard | `Abyssinian_65` | cat | cat | 6.4615 | dog | -97.7517 |
-| standard | `Ragdoll_255` | cat | cat | 8.6434 | dog | -122.7923 |
-| standard | `english_cocker_spaniel_56` | dog | dog | 24.9317 | cat | -44.0627 |
-| standard | `shiba_inu_67` | dog | dog | 12.9986 | cat | -44.5126 |
-| adversarial | `Abyssinian_65` | cat | dog | -0.5485 | dog | -0.6524 |
-| adversarial | `Ragdoll_255` | cat | dog | -0.6334 | dog | -0.7222 |
-| adversarial | `english_cocker_spaniel_56` | dog | dog | 1.3051 | dog | 0.6838 |
-| adversarial | `shiba_inu_67` | dog | dog | 1.3355 | dog | 0.9035 |
-
-## Standard arm: full official test and registered shifts
-
-| Condition | Accuracy | Macro accuracy | Cat accuracy | Dog accuracy | NLL | Brier | Coverage | Selective risk | ECE | AURC |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| brightness-0.6 | 99.21% | 99.04% | 98.56% | 99.52% | 0.0227 | 0.0125 | 87.65% | 0.00% | 0.0029 | 0.0002 |
-| brightness-0.8 | 99.37% | 99.29% | 99.07% | 99.52% | 0.0202 | 0.0105 | 89.67% | 0.00% | 0.0035 | 0.0001 |
-| clean | 99.37% | 99.32% | 99.15% | 99.48% | 0.0191 | 0.0099 | 90.05% | 0.00% | 0.0036 | 0.0001 |
-| contrast-0.5 | 98.72% | 98.79% | 98.99% | 98.59% | 0.0370 | 0.0204 | 83.57% | 0.00% | 0.0051 | 0.0004 |
-| contrast-0.75 | 99.24% | 99.22% | 99.15% | 99.28% | 0.0224 | 0.0115 | 89.02% | 0.00% | 0.0029 | 0.0002 |
-| gaussian_blur-0.75 | 99.02% | 98.88% | 98.48% | 99.28% | 0.0288 | 0.0154 | 87.30% | 0.00% | 0.0049 | 0.0002 |
-| gaussian_blur-1.5 | 97.36% | 96.41% | 93.74% | 99.07% | 0.0762 | 0.0416 | 76.83% | 0.04% | 0.0114 | 0.0015 |
-| gaussian_noise-0.02 | 99.26% | 99.28% | 99.32% | 99.24% | 0.0200 | 0.0106 | 89.59% | 0.00% | 0.0036 | 0.0001 |
-| gaussian_noise-0.05 | 98.75% | 98.68% | 98.48% | 98.87% | 0.0360 | 0.0192 | 83.05% | 0.00% | 0.0048 | 0.0004 |
-
-## Adversarial arm: full official test and registered shifts
-
-| Condition | Accuracy | Macro accuracy | Cat accuracy | Dog accuracy | NLL | Brier | Coverage | Selective risk | ECE | AURC |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| brightness-0.6 | 67.76% | 50.00% | 0.00% | 100.00% | 0.6119 | 0.4237 | 97.71% | 30.66% | 0.0654 | 0.0942 |
-| brightness-0.8 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5812 | 0.4009 | 93.38% | 27.44% | 0.1468 | 0.0769 |
-| clean | 67.76% | 50.00% | 0.00% | 100.00% | 0.5505 | 0.3801 | 90.32% | 24.98% | 0.2052 | 0.0747 |
-| contrast-0.5 | 67.76% | 50.00% | 0.00% | 100.00% | 0.6266 | 0.4352 | 99.73% | 32.06% | 0.0179 | 0.1486 |
-| contrast-0.75 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5978 | 0.4129 | 96.08% | 29.48% | 0.1085 | 0.0837 |
-| gaussian_blur-0.75 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5680 | 0.3928 | 95.83% | 29.29% | 0.1792 | 0.0857 |
-| gaussian_blur-1.5 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5933 | 0.4107 | 99.89% | 32.17% | 0.1257 | 0.1068 |
-| gaussian_noise-0.02 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5508 | 0.3804 | 90.73% | 25.32% | 0.2058 | 0.0754 |
-| gaussian_noise-0.05 | 67.76% | 50.00% | 0.00% | 100.00% | 0.5538 | 0.3827 | 92.50% | 26.75% | 0.2043 | 0.0785 |
-
-Scalar temperatures and 90%-target confidence thresholds use only clean
-calibration data; they are frozen for every test, corruption, and attack condition.
-Confidence is not an out-of-distribution detector.
-
-## Figures and distribution
-
-Synthetic feature montages, kernel grids, and aggregate charts may be exported.
-Actual pet images, feature-map overlays, Grad-CAM, occlusion panels, and receptive-field
-crops remain in ignored local analysis outputs. The generated notebook can display them
-locally, but they are not silently included in the public repository.
+The important engineering lesson is earlier in the pipeline: overall accuracy alone
+would have made the collapsed PGD model look moderately successful. Macro accuracy,
+per-species recall and prediction counts exposed the failure immediately. Internal
+visualizations then helped characterize a failed classifier; they did not repair it.
 
 ## Limitations
 
-- Responses do not identify which training photograph caused a filter to be learned.
-- Synthetic patterns are regularized optimized stimuli, not reconstructed pet photographs.
-- ImageNet pretraining already supplies feature detectors; changes from initialization are reported.
-- No channel is claimed to be a verified eye, ear, fur, or other named semantic detector.
-- Grad-CAM is coarse class attribution; channel sensitivity is a local input gradient.
-- Theoretical high-layer receptive fields exceed the crop; an activation cell is not a tiny isolated part.
-- Occlusion introduces an artificial shift; four fixed anchors support descriptive, not population, conclusions.
-- Channels are ranked independently within each arm; equal channel IDs do not guarantee equal semantics.
-- Only one initialization and finite digital attack family are evaluated; no physical or safety claim is made.
+- One model pair, split and seed family.
+- ImageNet initialization means many filters were inherited rather than learned from
+  Oxford-IIIT Pet alone.
+- The validation set has 95 cats and 200 dogs; it is not the official test partition.
+- The four walkthrough anchors and 64 reference images are descriptive samples.
+- Independently selected/normalized channels cannot be compared as semantic matches.
+- No attack-test accuracy, certified robustness, physical robustness or safe-use claim.
+- Dataset photographs and derived photo panels remain local under the dataset's license;
+  repository figures are synthetic or aggregate only.
 
-There is no bootstrap representation-retention claim in this revised study. No named
-concept, exact causal training source, physical robustness, or safer recognition claim
-is made. Configuration SHA-256: `3b96c26d328cffc308cb6de70e070748bba3c9fe7a7b229ccba6749f8aec2a91`. Checkpoint/source/evidence hashes are
-recorded in `local-release-manifest.json`.
+## Reproduce and verify
+
+```bash
+.venv/bin/python src/cli.py reproduce --config configs/experiment.yaml --device mps
+.venv/bin/python -m pytest -q -p no:cacheprovider
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .
+.venv/bin/python -m mypy src
+.venv/bin/python scripts/check_repository.py
+```
+
+Configuration SHA-256: `61fda0dad3180c5ffb9fd1b42cdd27815fed1e58ea433bbc5b0d431394b58e34`.
+Standard checkpoint SHA-256: `6870b521f0f82f88609c5833da27d8a8a12c60d9955863a653ceac375eab8610`.
+PGD checkpoint SHA-256: `4e7a736b951f3b338f150d67f4d50d8a1cc9e0d99e8512b137160d55530d9cf6`.
+
+[Machine-readable public results](../docs/results.json) ·
+[Protocol](../docs/PROTOCOL.md) · [Guided notebook](../notebooks/cat_dog_cnn_features.ipynb)

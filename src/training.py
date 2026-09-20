@@ -6,6 +6,8 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -33,6 +35,14 @@ from src.runtime import (
     memory_snapshot,
     record_failure,
     synchronize,
+)
+from src.training_monitoring import (
+    collect_clean_monitoring,
+    prepare_training_monitoring,
+    register_training_monitoring_source,
+    save_training_examples,
+    training_monitoring_enabled,
+    training_objective_metrics,
 )
 
 Arm = Literal["standard", "adversarial"]
@@ -74,6 +84,13 @@ def experiment_provenance(config: ExperimentConfig) -> dict[str, str]:
         source_fingerprint = register_pilot_training_source(config)
         combined_fields["pilot_training_source"] = source_fingerprint
         optional_fields["pilot_training_source_sha256"] = source_fingerprint
+    if training_monitoring_enabled(config):
+        monitoring_protocol = prepare_training_monitoring(config)
+        combined_fields["training_monitoring_protocol"] = monitoring_protocol.sha256
+        optional_fields["training_monitoring_protocol_sha256"] = monitoring_protocol.sha256
+        monitoring_source = register_training_monitoring_source(config)
+        combined_fields["training_monitoring_source"] = monitoring_source
+        optional_fields["training_monitoring_source_sha256"] = monitoring_source
     combined = sha256_bytes(canonical_json_bytes(combined_fields))
     return {
         "config_sha256": config.sha256,
@@ -207,12 +224,73 @@ def _assert_finite_gradients(model: nn.Module) -> float:
     return norm
 
 
+def _repair_completed_journal(
+    config: ExperimentConfig,
+    arm: Arm,
+    provenance: dict[str, str],
+    initialization_hash: str,
+    epoch: int,
+    updates: int,
+    updates_per_epoch: int,
+    history: list[dict[str, Any]],
+    extra: dict[str, Any],
+) -> bool:
+    """Reconcile the two-file commit gap from authoritative checkpoint evidence.
+
+    An epoch checkpoint is written before its convenient JSON journal. A kernel
+    interruption between those atomic writes must not leave completed-resume
+    visualizations using older epochs. Invocation timing cannot be recovered
+    from a missing journal; keep it absent rather than inventing measurements.
+    """
+
+    path = config.project_path("artifacts") / "training" / f"{arm}.json"
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+        except (OSError, ValueError):
+            pass  # The verified checkpoint, not this presentation journal, wins.
+    authoritative = {
+        "status": "complete",
+        "arm": arm,
+        "provenance": provenance,
+        "initialization_sha256": initialization_hash,
+        "completed_epochs": epoch,
+        "completed_updates": updates,
+        "updates_per_epoch": updates_per_epoch,
+        "history": history,
+        "checkpoint": str(checkpoint_path(config, arm, epoch)),
+        **extra,
+    }
+    if all(existing.get(key) == value for key, value in authoritative.items()):
+        return False
+    same_run = existing.get("provenance") == provenance and existing.get("arm") == arm
+    repaired = {**(existing if same_run else {}), **authoritative}
+    if history and "memory" in history[-1]:
+        repaired["current_memory"] = history[-1]["memory"]
+    repaired["journal_recovery"] = {
+        "repaired_at": utc_now(),
+        "method": "authoritative_verified_completed_checkpoint",
+        "previous_completed_epochs": existing.get("completed_epochs"),
+        "invocation_telemetry_preserved": same_run,
+        "missing_invocation_telemetry_not_reconstructed": not same_run,
+        "preserved_telemetry_may_cover_an_earlier_epoch": (
+            same_run and existing.get("completed_epochs") != epoch
+        ),
+    }
+    atomic_write_json(path, repaired)
+    return True
+
+
 def train_arm(
     config: ExperimentConfig,
     arm: Arm,
     device: torch.device,
     *,
     progress: bool = True,
+    epoch_observer: Callable[[list[dict[str, Any]], Arm], None] | None = None,
 ) -> dict[str, Any]:
     """Train or resume one configured arm without inspecting the test partition."""
 
@@ -226,11 +304,15 @@ def train_arm(
         splits = load_registered_splits(config)
         training_records = splits["training"]
         protocol = None
+        monitoring_protocol = None
         if pilot_enabled(config):
             if arm != "adversarial":
                 raise ValueError("the exploratory pilot trains only the adversarial arm")
             protocol = prepare_pilot_protocol(config, splits)
             training_records = protocol.fit_records
+        if training_monitoring_enabled(config):
+            monitoring_protocol = prepare_training_monitoring(config, splits)
+            training_records = monitoring_protocol.fit_records
         model = build_model(config).to(device=device, dtype=torch.float32)
         initialization_hash = state_dict_hash(model.state_dict())
         provenance = experiment_provenance(config)
@@ -243,19 +325,6 @@ def train_arm(
             config, arm, model, optimizer, provenance
         )
         epochs = config.integer("training", "epochs")
-        if resumed_epoch >= epochs:
-            status(
-                f"{arm}: reusing the verified epoch-{resumed_epoch} checkpoint.",
-                enabled=progress,
-            )
-            return {
-                "status": "complete",
-                "arm": arm,
-                "checkpoint": str(checkpoint_path(config, arm)),
-                "resumed_without_work": True,
-                "epochs": resumed_epoch,
-                "updates": completed_updates,
-            }
         micro_batch = config.integer("training", "micro_batch_size")
         accumulation = config.integer("training", "gradient_accumulation_steps")
         batches_per_epoch = math.ceil(len(training_records) / micro_batch)
@@ -267,6 +336,50 @@ def train_arm(
             raise ResumeError(
                 f"checkpoint update count {completed_updates} != expected {expected_resume_updates}"
             )
+        if resumed_epoch > epochs:
+            raise ResumeError("checkpoint epoch exceeds the configured fixed final epoch")
+        repaired_journal = False
+        if resumed_epoch == epochs:
+            repaired_journal = _repair_completed_journal(
+                config,
+                arm,
+                provenance,
+                initialization_hash,
+                resumed_epoch,
+                completed_updates,
+                updates_per_epoch,
+                history,
+                {
+                    **({"pilot_protocol_sha256": protocol.sha256} if protocol is not None else {}),
+                    **(
+                        {
+                            "training_monitoring_protocol_sha256": monitoring_protocol.sha256,
+                            "effective_fit_count": len(monitoring_protocol.fit_records),
+                            "validation_count": len(monitoring_protocol.validation_records),
+                        }
+                        if monitoring_protocol is not None
+                        else {}
+                    ),
+                },
+            )
+        if history and epoch_observer is not None:
+            # Reconstruct the live view from checkpoint-backed measurements.
+            # The observer receives a copy and cannot modify checkpoint history.
+            epoch_observer(deepcopy(history), arm)
+        if resumed_epoch == epochs:
+            status(
+                f"{arm}: reusing the verified epoch-{resumed_epoch} checkpoint.",
+                enabled=progress,
+            )
+            return {
+                "status": "complete",
+                "arm": arm,
+                "checkpoint": str(checkpoint_path(config, arm)),
+                "resumed_without_work": True,
+                "journal_repaired_from_checkpoint": repaired_journal,
+                "epochs": resumed_epoch,
+                "updates": completed_updates,
+            }
         attack_spec = AttackSpec(
             epsilon=config.number("attack", "epsilon"),
             step_size=config.number("attack", "step_size"),
@@ -306,6 +419,17 @@ def train_arm(
                 running_clean_loss = 0.0
                 running_adversarial_loss = 0.0
                 sample_count = 0
+                objective_confusion = (
+                    torch.zeros((config.integer("model", "classes"),) * 2, dtype=torch.int64)
+                    if monitoring_protocol is not None
+                    else None
+                )
+                example_rows: list[dict[str, Any]] = []
+                gallery_by_id = (
+                    {record.sample_id: record for record in monitoring_protocol.gallery_records}
+                    if monitoring_protocol is not None and epoch in {1, epochs}
+                    else {}
+                )
                 last_gradient_norm = 0.0
                 last_lrs = base_lrs
                 with tqdm(
@@ -321,6 +445,7 @@ def train_arm(
                         sample_ids = list(sample_ids_raw)
                         pixels = pixels.to(device=device, dtype=torch.float32)
                         labels = labels.to(device=device, dtype=torch.long)
+                        clean_pixels = pixels
                         if protocol is not None:
                             loss, clean_loss, adversarial_loss = pilot_training_loss(
                                 model,
@@ -348,6 +473,40 @@ def train_arm(
                             logits = model(pixels)
                             ensure_finite("training logits", logits)
                             loss = nnf.cross_entropy(logits, labels)
+                            if monitoring_protocol is not None:
+                                assert objective_confusion is not None
+                                objective_predictions = logits.detach().argmax(dim=1).cpu()
+                                objective_labels = labels.detach().cpu()
+                                classes = config.integer("model", "classes")
+                                objective_confusion += torch.bincount(
+                                    objective_labels * classes + objective_predictions,
+                                    minlength=classes * classes,
+                                ).reshape(classes, classes)
+                                for index, sample_id in enumerate(sample_ids):
+                                    if sample_id not in gallery_by_id:
+                                        continue
+                                    example_rows.append(
+                                        {
+                                            "sample_id": sample_id,
+                                            "label": int(objective_labels[index]),
+                                            "clean_pixels": clean_pixels[index]
+                                            .detach()
+                                            .cpu()
+                                            .numpy()
+                                            .copy(),
+                                            "objective_pixels": pixels[index]
+                                            .detach()
+                                            .cpu()
+                                            .numpy()
+                                            .copy(),
+                                            "logits": logits[index].detach().cpu().numpy().copy(),
+                                            "batch_index": batch_index,
+                                            "update_index": completed_updates + 1,
+                                            "original_image_path": gallery_by_id[
+                                                sample_id
+                                            ].image_path,
+                                        }
+                                    )
                         ensure_finite("training loss", loss)
                         window_size = accumulation_window_size(
                             batch_index, batches_per_epoch, accumulation
@@ -417,6 +576,48 @@ def train_arm(
                     synchronize(device)
                     epoch_record["seconds"] = time.perf_counter() - epoch_started
                     epoch_record["memory"] = memory_snapshot(device)
+                if monitoring_protocol is not None:
+                    assert objective_confusion is not None
+                    status(
+                        f"{arm} — epoch {epoch}/{epochs}: measuring clean fitting and validation "
+                        "(evaluation mode; no checkpoint selection)",
+                        enabled=progress,
+                    )
+                    epoch_record["training_objective"] = training_objective_metrics(
+                        objective_confusion, running_loss, sample_count, arm
+                    )
+                    epoch_record["monitoring"] = {
+                        "protocol_sha256": monitoring_protocol.sha256,
+                        "checkpoint_selection": "none; fixed configured final epoch",
+                        "train_clean": collect_clean_monitoring(
+                            model,
+                            monitoring_protocol.fit_records,
+                            config,
+                            device,
+                            progress=progress,
+                            description=f"{arm} clean fitting",
+                        ),
+                        "validation_clean": collect_clean_monitoring(
+                            model,
+                            monitoring_protocol.validation_records,
+                            config,
+                            device,
+                            progress=progress,
+                            description=f"{arm} clean validation",
+                        ),
+                    }
+                    if gallery_by_id:
+                        epoch_record["training_examples"] = save_training_examples(
+                            config,
+                            arm,
+                            epoch,
+                            example_rows,
+                            provenance,
+                            monitoring_protocol,
+                        )
+                    synchronize(device)
+                    epoch_record["seconds"] = time.perf_counter() - epoch_started
+                    epoch_record["memory"] = memory_snapshot(device)
                 history.append(epoch_record)
                 checkpoint = {
                     "schema_version": 1,
@@ -451,8 +652,19 @@ def train_arm(
                             if protocol is not None
                             else {}
                         ),
+                        **(
+                            {
+                                "training_monitoring_protocol_sha256": monitoring_protocol.sha256,
+                                "effective_fit_count": len(monitoring_protocol.fit_records),
+                                "validation_count": len(monitoring_protocol.validation_records),
+                            }
+                            if monitoring_protocol is not None
+                            else {}
+                        ),
                     },
                 )
+                if epoch_observer is not None:
+                    epoch_observer(deepcopy(history), arm)
                 epoch_bar.set_postfix(loss=f"{mean_loss:.4f}", updates=completed_updates)
                 status(
                     f"{arm} — epoch {epoch}/{epochs} complete: loss={mean_loss:.4f}, "

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from html import escape
 from typing import Any
+from weakref import WeakSet
 
 from IPython import get_ipython
 from IPython.display import DisplayHandle
@@ -17,6 +18,15 @@ def in_notebook() -> bool:
 
 class NotebookProgress(TerminalProgress):  # type: ignore[misc]
     """Render nested tqdm counters without terminal cursor controls or widgets."""
+
+    # tqdm's monitor refreshes bars from a background thread. IPython display handles
+    # belong to the notebook cell's context, so publishing from that thread can raise
+    # ``LookupError: parent_header`` while training itself is still healthy.
+    monitor_interval = 0
+    # tqdm otherwise shares one instance registry across subclasses. Keeping the
+    # notebook bars separate also prevents a monitor started by terminal tqdm from
+    # discovering and refreshing an IPython display handle in its worker thread.
+    _instances: WeakSet[Any] = WeakSet()
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self.handle: Any = None

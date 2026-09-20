@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -12,13 +13,15 @@ import torch
 
 from src.config import ExperimentConfig, load_config
 from src.data import load_registered_splits
+from src.evaluation import EVALUATION_SECTIONS, EvaluationSection
+from src.feature_section_types import FEATURE_SECTIONS, FeatureSection
 from src.io_utils import environment_snapshot, sha256_file
 from src.model import build_model
 from src.progress import status
 from src.runtime import require_device
 
 ROOT = Path(__file__).resolve().parents[1]
-NotebookStage = Literal["preflight", "train", "evaluate", "represent", "report"]
+NotebookStage = Literal["setup", "preflight", "train", "evaluate", "represent", "report"]
 Arm = Literal["standard", "adversarial"]
 
 
@@ -76,6 +79,13 @@ def _per_class(records: list[Any], classes: int) -> list[int]:
 def inspect_data(config: ExperimentConfig) -> dict[str, Any]:
     status("Notebook: checking the registered split and fixed sample sets...")
     splits = load_registered_splits(config)
+    from src.training_monitoring import prepare_training_monitoring, training_monitoring_enabled
+
+    registered_training = splits["training"]
+    monitoring = None
+    if training_monitoring_enabled(config):
+        monitoring = prepare_training_monitoring(config, splits)
+        splits = {**splits, "training": monitoring.fit_records}
     classes = config.integer("dataset", "classes")
     manifest_path = config.project_path("artifacts") / "data" / "manifest.json"
     manifest_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -103,6 +113,11 @@ def inspect_data(config: ExperimentConfig) -> dict[str, Any]:
         result["fixed_feature_anchors"] = (
             config.integer("feature_visualization", "anchors_per_class") * classes
         )
+        if monitoring is not None:
+            result["original_training_pool"] = len(registered_training)
+            result["validation"] = len(monitoring.validation_records)
+            result["validation_per_class"] = _per_class(monitoring.validation_records, classes)
+            result["training_monitoring_protocol_sha256"] = monitoring.sha256
     else:
         result["projection_subset"] = len(splits["projection"])
     return result
@@ -136,7 +151,19 @@ def run_stage(
     device: str,
     arm: Arm | None = None,
     progress: bool = True,
+    section: EvaluationSection | FeatureSection | None = None,
+    epoch_observer: Callable[[list[dict[str, Any]], Arm], None] | None = None,
 ) -> object:
+    if section is not None:
+        supported = (
+            EVALUATION_SECTIONS
+            if stage == "evaluate"
+            else FEATURE_SECTIONS
+            if stage == "represent"
+            else ()
+        )
+        if section not in supported:
+            raise ValueError(f"unsupported section {section!r} for notebook stage {stage!r}")
     label = f"{arm} training" if stage == "train" else stage
     if not full:
         status(
@@ -152,7 +179,11 @@ def run_stage(
     require_project_environment()
     status(f"Starting {label} (requested device: {device})...", enabled=progress)
     try:
-        if stage == "preflight":
+        if stage == "setup":
+            from src.setup_stage import setup_experiment
+
+            result = setup_experiment(config, progress=progress)
+        elif stage == "preflight":
             from src.preflight import run_preflight
 
             result = run_preflight(config, require_device(device), progress=progress)
@@ -166,15 +197,40 @@ def run_stage(
                 raise ValueError(
                     f"requested device {device} does not match training.device {configured}"
                 )
-            result = train_arm(config, arm, require_device(configured), progress=progress)
+            if epoch_observer is None:
+                result = train_arm(config, arm, require_device(configured), progress=progress)
+            else:
+                result = train_arm(
+                    config,
+                    arm,
+                    require_device(configured),
+                    progress=progress,
+                    epoch_observer=epoch_observer,
+                )
         elif stage == "evaluate":
             from src.evaluation import evaluate
 
-            result = evaluate(config, require_device(device), progress=progress)
+            if section is None:
+                result = evaluate(config, require_device(device), progress=progress)
+            else:
+                result = evaluate(
+                    config,
+                    require_device(device),
+                    progress=progress,
+                    section=cast(EvaluationSection, section),
+                )
         elif stage == "represent":
             from src.feature_visualization import visualize_features
 
-            result = visualize_features(config, require_device(device), progress=progress)
+            if section is None:
+                result = visualize_features(config, require_device(device), progress=progress)
+            else:
+                result = visualize_features(
+                    config,
+                    require_device(device),
+                    progress=progress,
+                    section=cast(FeatureSection, section),
+                )
         elif stage == "report":
             from src.reporting import report
 

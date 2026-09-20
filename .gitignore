@@ -6,14 +6,21 @@
 __pycache__/
 *.py[cod]
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .ipynb_checkpoints/
+.jupyter_cache/
 .idea/
 .vscode/
 .env
 .env.*
 !.env.example
 *.log
+*.prof
+*.tmp
+*.bak
+*.orig
 *.pt
 *.pth
 *.ckpt
@@ -37,6 +44,10 @@ results/*.npz
 results/per_sample/
 figures/local/
 reports/local/
+
+# Owner-executed notebook backups; the tracked guide must remain output-free.
+notebooks/*.executed.ipynb
+notebooks/*.before-*.ipynb
 
 # Generated public-ready outputs are intentionally reviewed before tracking.
 figures/generated/

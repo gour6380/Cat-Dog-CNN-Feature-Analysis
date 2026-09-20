@@ -11,7 +11,7 @@ import io
 import json
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import matplotlib
 
@@ -22,32 +22,22 @@ import torch
 from matplotlib.patches import Rectangle
 from torch.nn import functional as F
 
-from src.attacks import AttackSpec, pgd_attack
 from src.classifier_diagnostics import species_diagnostic_warning, species_prediction_diagnostic
 from src.config import ExperimentConfig
-from src.data import PetRecordDataset, load_registered_splits, stratified_hash_selection
-from src.eda import generate_eda
 from src.feature_methods import (
     activation_maximize,
     capture_activations,
-    channel_saliency,
-    grad_cam,
-    occlusion_map,
-    receptive_field_box,
 )
+from src.feature_section_types import FEATURE_SECTIONS, FeatureSection
 from src.io_utils import (
     atomic_save_npz,
     atomic_write_bytes,
     atomic_write_json,
     environment_snapshot,
-    sha256_bytes,
     sha256_file,
-    utc_now,
 )
-from src.model import build_model, load_checkpoint_model, state_dict_hash
-from src.progress import status, tqdm
-from src.runtime import memory_snapshot, record_failure, synchronize
-from src.training import Arm, checkpoint_path, experiment_provenance
+from src.runtime import record_failure, synchronize
+from src.training import Arm
 
 LAYERS = ["network.relu", "network.layer2", "network.layer4"]
 LEVELS = ["Low · stem ReLU", "Mid · layer2", "High · layer4"]
@@ -67,8 +57,8 @@ LIMITATIONS = [
     "descriptive, not population, conclusions.",
     "Channels are ranked independently within each arm; "
     "equal channel IDs do not guarantee equal semantics.",
-    "Only one initialization and finite digital attack family are evaluated; "
-    "no physical or safety claim is made.",
+    "One matched model pair is interpreted on clean inputs; this walkthrough "
+    "does not measure robust accuracy or establish physical robustness or safety.",
 ]
 
 
@@ -171,6 +161,34 @@ def _save(figure: Any, path: Path) -> None:
     figure.savefig(buffer, format="png", dpi=130, bbox_inches="tight", facecolor="white")
     plt.close(figure)
     atomic_write_bytes(path, buffer.getvalue())
+
+
+def _save_figure_record(
+    figure: Any,
+    path: Path,
+    root: Path,
+    *,
+    arm: str,
+    caption: str,
+    kind: str,
+    shareable: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist an image and its measured identity, with explicit sharing status."""
+    _save(figure, path)
+    record: dict[str, Any] = {
+        "path": str(path.relative_to(root)),
+        "sha256": sha256_file(path),
+        "caption": caption,
+        "kind": kind,
+        "arm": arm,
+        "shareable": shareable,
+    }
+    if metadata is not None:
+        record["metadata"] = metadata
+        for key in ("sample_id", "identity", "config_sha256", "checkpoint_sha256"):
+            record[key] = metadata[key]
+    return record
 
 
 def _panel(axis: Any, image: np.ndarray[Any, Any], title: str) -> None:
@@ -477,19 +495,32 @@ def _context_figures(
 
 
 def visualize_features(
-    config: ExperimentConfig, device: torch.device, *, progress: bool = True
+    config: ExperimentConfig,
+    device: torch.device,
+    *,
+    progress: bool = True,
+    section: FeatureSection | None = None,
 ) -> dict[str, Any]:
     """Protect every stage, and persist synchronized timing/environment for new evidence."""
     try:
         synchronize(device)
         started = time.perf_counter()
-        result = _visualize_features(config, device, progress=progress)
+        if section is not None and section not in FEATURE_SECTIONS:
+            raise ValueError(f"unknown feature section: {section}")
+        options: dict[str, Any] = {} if section is None else {"section": section}
+        result = _visualize_features(config, device, progress=progress, **options)
         synchronize(device)
         if "elapsed_seconds" not in result:
             result["elapsed_seconds"] = time.perf_counter() - started
             result["environment"] = environment_snapshot()
             atomic_write_json(
-                config.project_path("results") / "feature_visualizations.json", result
+                config.project_path("results")
+                / (
+                    "feature_visualizations.partial.json"
+                    if result.get("status") == "partial"
+                    else "feature_visualizations.json"
+                ),
+                result,
             )
         return result
     except BaseException as error:
@@ -497,611 +528,23 @@ def visualize_features(
             config.project_path("artifacts") / "failures" / "features.json",
             "features",
             error,
-            {"config_sha256": config.sha256, "device": str(device)},
+            {
+                "config_sha256": config.sha256,
+                "device": str(device),
+                **({"section": section} if section is not None else {}),
+            },
         )
         raise
 
 
 def _visualize_features(
-    config: ExperimentConfig, device: torch.device, *, progress: bool = True
+    config: ExperimentConfig,
+    device: torch.device,
+    *,
+    progress: bool = True,
+    section: FeatureSection | None = None,
 ) -> dict[str, Any]:
-    """Generate measured feature images from genuine binary checkpoints."""
-    if config.label_mode != "species":
-        raise ValueError("feature walkthrough requires a genuine cat/dog species head")
-    values = config.section("feature_visualization")
-    if values.get("layers") != LAYERS:
-        raise ValueError("feature methods currently support stem ReLU, layer2 and layer4")
-    size = config.integer("input", "size")
-    if size % int(values["occlusion_patch_size"]) or int(values["occlusion_stride"]) != int(
-        values["occlusion_patch_size"]
-    ):
-        raise ValueError(
-            "equal-area localization uses a nonoverlapping tile grid dividing the input"
-        )
-    splits = load_registered_splits(config)
-    seed = int(values["seed"])
-    references = stratified_hash_selection(
-        splits["calibration"], int(values["calibration_per_class"]), f"features:{seed}:calibration"
-    )
-    anchors = stratified_hash_selection(
-        splits["test"], int(values["anchors_per_class"]), f"features:{seed}:anchors"
-    )
-    checkpoints = {arm: sha256_file(checkpoint_path(config, arm)) for arm in ARMS}
-    provenance = experiment_provenance(config)
-    context_sources = _context_sources(config)
-    evaluation_path = config.project_path("results") / "evaluation.json"
-    diagnostics: dict[str, dict[str, Any]] = {}
-    if str(evaluation_path.relative_to(config.root)) in context_sources:
-        evaluation = json.loads(evaluation_path.read_text())
-        diagnostics = {
-            arm: species_prediction_diagnostic(evaluation["arms"][arm]["full_test"]["clean"])
-            for arm in ARMS
-        }
-    source_files = [
-        "src/feature_visualization.py",
-        "src/feature_methods.py",
-        "src/classifier_diagnostics.py",
-        "src/config.py",
-        "src/data.py",
-        "src/model.py",
-        "src/attacks.py",
-        "src/eda.py",
-        "src/io_utils.py",
-        "src/runtime.py",
-        "src/training.py",
-        "requirements.txt",
-    ]
-    method_sources = {name: sha256_file(config.root / name) for name in source_files}
-    method_hash = sha256_bytes(json.dumps(method_sources, sort_keys=True).encode())
-    identity = sha256_bytes(
-        json.dumps(
-            [config.sha256, checkpoints, method_hash, provenance, context_sources], sort_keys=True
-        ).encode()
-    )
-    destination = config.project_path("results") / "feature_visualizations.json"
-    if destination.is_file():
-        cached_raw = json.loads(destination.read_text())
-        if not isinstance(cached_raw, dict):
-            raise ValueError("feature visualization manifest must be a JSON object")
-        cached = cast(dict[str, Any], cached_raw)
-        if cached.get("identity") == identity and all(
-            (config.root / f["path"]).is_file()
-            and sha256_file(config.root / f["path"]) == f["sha256"]
-            for f in cached["figures"]
-        ):
-            status("Features: reusing matching feature images and diagnostics.", enabled=progress)
-            return cached
-    reference_data = PetRecordDataset(references, config, training=False)
-    reference_pixels = torch.stack([reference_data[i][0] for i in range(len(references))]).to(
-        device
-    )
-    labels = np.array([record.label for record in references])
-    anchor_data = PetRecordDataset(anchors, config, training=False)
-    initial = build_model(config).to(device).eval()
-    batch = config.integer("training", "evaluation_batch_size")
-    baseline = _probe(initial, reference_pixels, batch)
-    initial_kernels = initial.network.conv1.weight.detach().cpu().clone()
-    initial.cpu()
-    del initial
-    result: dict[str, Any] = {
-        "schema_version": 1,
-        "created_at": utc_now(),
-        "identity": identity,
-        "config_sha256": config.sha256,
-        "method_sha256": method_hash,
-        "method_source_files_sha256": method_sources,
-        "device": str(device),
-        "provenance": provenance,
-        "context_evidence_sha256": context_sources,
-        "selection": {
-            "calibration_sample_ids": [r.sample_id for r in references],
-            "test_anchor_ids": [r.sample_id for r in anchors],
-            "channel_rule": "six largest balanced-calibration mean peak activations, "
-            "tie by channel ID",
-        },
-        "arms": {},
-        "figures": [],
-        "limitations": LIMITATIONS,
-    }
-    root = config.project_path("figures") / "features"
+    """Run one independent family, or assemble the full registered walkthrough."""
+    from src.feature_sections import compute_feature_sections
 
-    def register(
-        figure: Any, arm: str, name: str, caption: str, kind: str, shareable: bool = False
-    ) -> None:
-        warning = species_diagnostic_warning(diagnostics.get(arm, {}))
-        if warning:
-            caption += " " + warning
-            title = getattr(figure, "_suptitle", None)
-            if title is not None:
-                title.set_text(
-                    title.get_text().replace(arm, f"{arm} [single-species clean predictions]", 1)
-                )
-        path = root / f"{arm}-{name}.png"
-        _save(figure, path)
-        result["figures"].append(
-            {
-                "path": str(path.relative_to(config.root)),
-                "sha256": sha256_file(path),
-                "caption": caption,
-                "kind": kind,
-                "arm": arm,
-                "shareable": shareable,
-            }
-        )
-
-    register(
-        _workflow_figure(size),
-        "experiment",
-        "workflow",
-        "Measured-layer architecture and distinct probe questions: synthetic channel preferences, "
-        "spatial responses/local sensitivity, and class attribution. Intermediate layer1/layer3 "
-        "are included in the forward path, although not selected for image grids.",
-        "species_response",
-        True,
-    )
-    for figure, name, caption in _context_figures(config, context_sources):
-        register(figure, "experiment", name, caption, "species_response", True)
-    eda = generate_eda(config, progress=progress)
-    for name, relative in eda["figures"].items():
-        result["figures"].append(
-            {
-                "path": relative,
-                "sha256": sha256_file(config.root / relative),
-                "caption": f"Dataset EDA: {name.replace('_', ' ')}.",
-                "kind": "species_response",
-                "arm": "dataset",
-                "shareable": True,
-            }
-        )
-    try:
-        for arm in ARMS:
-            status(
-                f"Features: {arm} low/mid/high channel selection and patterns...", enabled=progress
-            )
-            model = load_checkpoint_model(config, checkpoint_path(config, arm), device)
-            before = state_dict_hash(model.state_dict())
-            probe = _probe(model, reference_pixels, batch)
-            arm_result: dict[str, Any] = {
-                "checkpoint_sha256": checkpoints[arm],
-                "layers": {},
-                "anchors": [],
-                "clean_classifier_diagnostic": diagnostics.get(arm, {"available": False}),
-            }
-            count = int(values["channels_per_layer"])
-            synthetic, response_axes = plt.subplots(
-                3, count, figsize=(count * 2.4, 8.3), squeeze=False
-            )
-            response_figure, axes = plt.subplots(1, 3, figsize=(16, 4.5), constrained_layout=True)
-            change_figure, change_axes = plt.subplots(
-                1, 3, figsize=(16, 4.5), constrained_layout=True
-            )
-            selected_by_layer: dict[str, list[int]] = {}
-            for level, layer in enumerate(LAYERS):
-                channels = np.argsort(-_np(probe[layer]["peaks"]).mean(axis=0), kind="stable")[
-                    :count
-                ].tolist()
-                selected_by_layer[layer] = channels
-                means = _np(probe[layer]["means"])
-                old = _np(baseline[layer]["means"])
-                class_means = [
-                    means[labels == target][:, channels].mean(axis=0).tolist() for target in (0, 1)
-                ]
-                relative = (
-                    (means[:, channels].mean(axis=0) - old[:, channels].mean(axis=0))
-                    / np.maximum(np.abs(old[:, channels].mean(axis=0)), 1e-6)
-                ).tolist()
-                spatial = [
-                    size // divisor
-                    for divisor in (2 if level == 0 else 8 if level == 1 else 32,) * 2
-                ]
-                arm_result["layers"][layer] = {
-                    "selected_channels": channels,
-                    "calibration_mean_by_species": class_means,
-                    "relative_change_from_initial": relative,
-                    "spatial_shape": spatial,
-                    "receptive_field_pixels": FIELDS[level],
-                    "synthetic_responses": [],
-                }
-                for target, color in ((0, "#7c3aed"), (1, "#ea580c")):
-                    axes[level].bar(
-                        np.arange(count) + (target - 0.5) * 0.35,
-                        class_means[target],
-                        0.35,
-                        label=SPECIES[target],
-                        color=color,
-                    )
-                axes[level].set(
-                    xticks=np.arange(count),
-                    xticklabels=channels,
-                    title=LEVELS[level],
-                    xlabel="channel ID",
-                    ylabel="mean activation · raw units",
-                )
-                axes[level].legend()
-                change_axes[level].bar(np.arange(count), relative, color="#0f766e")
-                change_axes[level].set(
-                    xticks=np.arange(count),
-                    xticklabels=channels,
-                    title=LEVELS[level],
-                    xlabel="channel ID",
-                    ylabel="relative mean-response change",
-                )
-                change_axes[level].axhline(0, color="black", linewidth=0.8)
-                patch_fig, patch_axes = plt.subplots(
-                    count, 4, figsize=(12, count * 2.5), squeeze=False
-                )
-                for col, channel in enumerate(
-                    tqdm(channels, desc=f"{arm} {layer} stimuli", disable=not progress)
-                ):
-                    pattern = _pattern(
-                        config,
-                        model,
-                        arm,
-                        layer,
-                        channel,
-                        device,
-                        identity,
-                        seed + level * 10000 + channel,
-                    )
-                    pattern_manifest = (
-                        config.project_path("artifacts")
-                        / "features"
-                        / "synthetic"
-                        / (f"{arm}-{layer.split('.')[-1]}-{channel}.json")
-                    )
-                    pattern_result = json.loads(pattern_manifest.read_text())
-                    arm_result["layers"][layer]["synthetic_responses"].append(pattern_result)
-                    _panel(
-                        response_axes[level, col],
-                        _rgb(pattern),
-                        f"{LEVELS[level]}\nchannel {channel} · synthetic\n"
-                        f"mean response {pattern_result['initial_unregularized_mean_response']:.2f}"
-                        f" → {pattern_result['final_unregularized_mean_response']:.2f}",
-                    )
-                    top = np.argsort(-_np(probe[layer]["peaks"][:, channel]), kind="stable")[:2]
-                    for rank, index in enumerate(top):
-                        pixels = reference_pixels[int(index)]
-                        y, x = probe[layer]["positions"][int(index), channel].tolist()
-                        box = receptive_field_box(layer, int(y), int(x), size)
-                        image = _rgb(pixels)
-                        x0, y0, x1, y1 = box
-                        _panel(
-                            patch_axes[col, rank * 2],
-                            image,
-                            f"ch {channel} · rank {rank + 1}\n"
-                            f"{references[int(index)].sample_id}\n"
-                            f"peak={probe[layer]['peaks'][int(index), channel]:.3f}",
-                        )
-                        patch_axes[col, rank * 2].add_patch(
-                            Rectangle(
-                                (x0, y0),
-                                x1 - x0,
-                                y1 - y0,
-                                fill=False,
-                                edgecolor="#00ff88",
-                                linewidth=2,
-                            )
-                        )
-                        _panel(
-                            patch_axes[col, rank * 2 + 1],
-                            image[y0:y1, x0:x1],
-                            f"theoretical RF crop\n{FIELDS[level]}px before clipping",
-                        )
-                patch_fig.suptitle(
-                    f"{arm} · {LEVELS[level]} · strongest calibration responses\n"
-                    "Green boxes are theoretical receptive fields, "
-                    "not proven anatomical concepts",
-                    fontsize=12,
-                )
-                register(
-                    patch_fig,
-                    arm,
-                    f"top-patches-{level}",
-                    f"Real calibration examples maximally activating the selected "
-                    f"{LEVELS[level]} channels; RF extents clipped to the evaluation crop.",
-                    "real_patches",
-                )
-            synthetic.suptitle(
-                f"{arm} · regularized activation-maximization patterns\n"
-                "Optimized stimuli, not training photographs or generative reconstructions",
-                fontsize=13,
-            )
-            register(
-                synthetic,
-                arm,
-                "synthetic-atlas",
-                "Layer-wise optimized channel preferences. Every tile is independently "
-                "optimized from private seeded noise; visual appearance is not evidence "
-                "of a named detector.",
-                "activation_maximization",
-                True,
-            )
-            response_figure.suptitle(
-                f"{arm} · measured responses on 32 cats + 32 dogs from calibration"
-            )
-            register(
-                response_figure,
-                arm,
-                "species-response",
-                "Raw channel response means on balanced calibration samples; activation "
-                "scales differ by layer/arm, and brightness in overlays is not an arm comparison.",
-                "species_response",
-                True,
-            )
-            change_figure.suptitle(
-                f"{arm} · response changes from the identical ImageNet-initialized encoder"
-            )
-            register(
-                change_figure,
-                arm,
-                "initial-response-change",
-                "Relative change on identical calibration images from ImageNet initialization. "
-                "This demonstrates change, not that all visible patterns were newly learned here.",
-                "initial_response_change",
-                True,
-            )
-            kernel_fig, kernel_axes = plt.subplots(
-                3, count, figsize=(count * 2.1, 6.8), squeeze=False
-            )
-            for column, channel in enumerate(selected_by_layer[LAYERS[0]]):
-                old_kernel = _np(initial_kernels[channel]).transpose(1, 2, 0)
-                current = _np(model.network.conv1.weight[channel]).transpose(1, 2, 0)
-                for row, pattern in enumerate((old_kernel, current, current - old_kernel)):
-                    _panel(
-                        kernel_axes[row, column],
-                        normalize_map(pattern),
-                        f"{['ImageNet initial', 'fine-tuned', 'weight difference'][row]}\n"
-                        f"conv1 channel {channel}",
-                    )
-            kernel_fig.suptitle(
-                f"{arm} · actual 7×7 RGB convolution kernels\n"
-                "Each tile independently scaled; difference colors are not RGB semantics"
-            )
-            register(
-                kernel_fig,
-                arm,
-                "kernels",
-                "Actual first-layer weights, initialized weights, and their differences. "
-                "Deeper channel filters have many input channels and are instead probed "
-                "with optimization and real examples.",
-                "kernels",
-                True,
-            )
-            randomized = _randomized(model, seed)
-            attribution_fig, attr_axes = plt.subplots(
-                len(anchors),
-                4,
-                figsize=(14, len(anchors) * 4.0),
-                squeeze=False,
-                constrained_layout=True,
-            )
-            for index, record in enumerate(anchors):
-                pixels = _single_image_pixels(anchor_data[index][0], device)
-                image = _rgb(pixels[0])
-                target = record.label
-                with torch.no_grad():
-                    logits = model(pixels)[0]
-                clean = capture_activations(model, pixels, LAYERS)
-                spec = AttackSpec(
-                    config.number("attack", "epsilon"),
-                    config.number("attack", "step_size"),
-                    config.integer("attack", "evaluation_steps"),
-                    True,
-                    config.integer("attack", "evaluation_restarts"),
-                    config.integer("attack", "evaluation_seed"),
-                )
-                attacked = pgd_attack(
-                    model, pixels, torch.tensor([target], device=device), [record.sample_id], spec
-                ).adversarial
-                shifted = capture_activations(model, attacked, LAYERS)
-                with torch.no_grad():
-                    attack_logits = model(attacked)[0]
-                cam = _resize_map(grad_cam(model, pixels, target), size)
-                random_cam = _resize_map(grad_cam(randomized, pixels, target), size)
-                occlusion = occlusion_map(
-                    model,
-                    pixels,
-                    target,
-                    patch_size=int(values["occlusion_patch_size"]),
-                    stride=int(values["occlusion_stride"]),
-                    batch_size=batch,
-                )
-                drops = _np(occlusion["score_drop"])
-                controls = localization_comparison(
-                    cam,
-                    _np(occlusion["positions"]),
-                    drops,
-                    int(values["top_occlusion_tiles"]),
-                    int(values["random_occlusion_repeats"]),
-                    seed + index,
-                )
-                anchor_result: dict[str, Any] = {
-                    "sample_id": record.sample_id,
-                    "label": target,
-                    "prediction": int(logits.argmax()),
-                    "clean_margin": float(logits[target] - logits[1 - target]),
-                    "pgd_prediction": int(attack_logits.argmax()),
-                    "pgd_margin": float(attack_logits[target] - attack_logits[1 - target]),
-                    **controls,
-                    "randomization_cam_correlation": map_correlation(cam, random_cam),
-                    "channel_peaks": {},
-                }
-                _panel(
-                    attr_axes[index, 0],
-                    image,
-                    f"{record.sample_id}\ntrue={SPECIES[target]} · "
-                    f"predicted={SPECIES[int(logits.argmax())]}\n"
-                    f"margin={anchor_result['clean_margin']:.3f}",
-                )
-                _overlay(
-                    attr_axes[index, 1],
-                    image,
-                    cam,
-                    f"True-{SPECIES[target]} Grad-CAM\ncoarse 7×7 attribution",
-                )
-                _panel(
-                    attr_axes[index, 2],
-                    image,
-                    "Occlusion target-margin decrease\nred supports · blue suppresses",
-                )
-                up = _resize_map(occlusion["score_drop"], size, mode="nearest")
-                vmax = max(float(np.abs(up).max()), 1e-6)
-                artist = attr_axes[index, 2].imshow(
-                    up, cmap="RdBu_r", alpha=0.65, vmin=-vmax, vmax=vmax
-                )
-                attribution_fig.colorbar(artist, ax=attr_axes[index, 2], shrink=0.7)
-                _overlay(
-                    attr_axes[index, 3],
-                    image,
-                    random_cam,
-                    "Fully randomized model Grad-CAM\nqualitative sanity control",
-                )
-                walk_fig, walk_axes = plt.subplots(3, 5, figsize=(17, 10), squeeze=False)
-                for level, layer in enumerate(LAYERS):
-                    channels = selected_by_layer[layer]
-                    channel = max(channels, key=lambda c: float(clean[layer][0, c].max()))
-                    raw = clean[layer][0, channel]
-                    y, x = divmod(int(raw.argmax()), raw.shape[1])
-                    x0, y0, x1, y1 = receptive_field_box(layer, y, x, size)
-                    saliency = _resize_map(channel_saliency(model, pixels, layer, channel), size)
-                    _panel(
-                        walk_axes[level, 0],
-                        image,
-                        f"{LEVELS[level]} · channel {channel}\npeak unit RF={FIELDS[level]}px",
-                    )
-                    walk_axes[level, 0].add_patch(
-                        Rectangle(
-                            (x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor="#00ff88", linewidth=2
-                        )
-                    )
-                    clean_map, pgd_map = _np(raw), _np(shifted[layer][0, channel])
-                    limit = max(float(clean_map.max()), float(pgd_map.max()), 1e-6)
-                    for col, heat, title in (
-                        (1, clean_map, "clean spatial response"),
-                        (3, pgd_map, "PGD spatial response"),
-                    ):
-                        artist = walk_axes[level, col].imshow(
-                            heat, cmap="inferno", vmin=0, vmax=limit
-                        )
-                        walk_axes[level, col].set_title(
-                            f"{title}\nshared raw-unit scale={limit:.3f}", fontsize=9
-                        )
-                        walk_axes[level, col].axis("off")
-                        walk_fig.colorbar(artist, ax=walk_axes[level, col], shrink=0.65)
-                    _overlay(
-                        walk_axes[level, 2],
-                        image,
-                        saliency,
-                        "Input-gradient sensitivity\nof this channel's peak",
-                    )
-                    _panel(
-                        walk_axes[level, 4], np.abs(clean_map - pgd_map), "absolute response change"
-                    )
-                    anchor_result["channel_peaks"][layer] = {
-                        "channel": channel,
-                        "clean_peak": float(raw.max()),
-                        "pgd_peak": float(shifted[layer][0, channel].max()),
-                        "peak_grid_yx": [y, x],
-                        "receptive_field_xyxy": [x0, y0, x1, y1],
-                    }
-                walk_fig.suptitle(
-                    f"{arm} · {record.sample_id} · true {SPECIES[target]}\n"
-                    "Filter response, theoretical extent, and local sensitivity "
-                    "are different quantities",
-                    fontsize=13,
-                )
-                register(
-                    walk_fig,
-                    arm,
-                    f"walkthrough-{record.sample_id}",
-                    "A fixed test anchor through three levels. Same channel and scale within "
-                    "clean/PGD maps; high-layer RF is broad. Input gradients indicate local "
-                    "sensitivity, not training origin.",
-                    "activation_walkthrough",
-                )
-                arm_result["anchors"].append(anchor_result)
-                atomic_save_npz(
-                    config.project_path("artifacts") / "features" / arm / f"{record.sample_id}.npz",
-                    {
-                        "clean_pixels": _np(pixels[0]),
-                        "pgd_pixels": _np(attacked[0]),
-                        "gradcam": cam,
-                        "randomized_gradcam": random_cam,
-                        "occlusion_drop": drops,
-                    },
-                )
-            attribution_fig.suptitle(
-                f"{arm} · which regions influence the binary prediction?\n"
-                "Target is always the true species, including errors; "
-                "overlays independently normalized",
-                fontsize=13,
-            )
-            register(
-                attribution_fig,
-                arm,
-                "class-attribution",
-                "True-species Grad-CAM, signed equal-area occlusion margin drops, and fully "
-                "randomized-model sanity control on all four hash-selected anchors.",
-                "class_attribution",
-            )
-            local_fig, axis = plt.subplots(figsize=(11, 4.5), constrained_layout=True)
-            rows = arm_result["anchors"]
-            xaxis = np.arange(len(rows))
-            axis.bar(
-                xaxis - 0.18,
-                [r["top_gradcam_occlusion_mean_drop"] for r in rows],
-                0.36,
-                label="top 4 Grad-CAM tiles",
-                color="#0f766e",
-            )
-            axis.bar(
-                xaxis + 0.18,
-                [r["random_occlusion_mean_drop"] for r in rows],
-                0.36,
-                label="mean of 100 random 4-tile sets",
-                color="#64748b",
-            )
-            axis.set(
-                xticks=xaxis,
-                xticklabels=[r["sample_id"] for r in rows],
-                ylabel="mean true-class logit-margin decrease",
-                title=f"{arm} · attribution-to-occlusion diagnostic",
-            )
-            axis.tick_params(axis="x", labelsize=8)
-            axis.axhline(0, color="black", linewidth=0.8)
-            axis.legend()
-            register(
-                local_fig,
-                arm,
-                "localization-summary",
-                "Average single-tile occlusion effect for Grad-CAM-ranked versus random "
-                "equal-area tiles. Not an additive whole-mask effect; four anchors "
-                "do not support a population claim.",
-                "localization_summary",
-                True,
-            )
-            arm_result["state_unchanged"] = before == state_dict_hash(model.state_dict())
-            if not arm_result["state_unchanged"]:
-                raise RuntimeError("visualization modified trained model state")
-            result["arms"][arm] = arm_result
-            atomic_write_json(
-                config.project_path("artifacts") / "features" / f"{arm}.json", arm_result
-            )
-            model.cpu()
-            randomized.cpu()
-            del model, randomized
-            if device.type == "mps":
-                torch.mps.empty_cache()
-        result["final_memory"] = memory_snapshot(device)
-        atomic_write_json(destination, result)
-        status(
-            "Features complete: patterns, real patches, responses, attribution, "
-            "controls and chart evidence saved.",
-            enabled=progress,
-        )
-        return result
-    except BaseException as error:
-        record_failure(
-            config.project_path("artifacts") / "failures" / "features.json", "features", error
-        )
-        raise
+    return compute_feature_sections(config, device, progress=progress, section=section)

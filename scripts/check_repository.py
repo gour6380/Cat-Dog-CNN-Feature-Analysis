@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import re
@@ -36,11 +37,23 @@ ALLOWED_NOTEBOOKS = {
     Path("notebooks/cat_dog_cnn_features.ipynb"),
 }
 SAFE_FIGURE_KINDS = {
+    "activation_maximization_comparison",
     "kernels",
     "activation_maximization",
     "species_response",
     "initial_response_change",
     "localization_summary",
+    "validation_monitoring",
+}
+# Historical evidence is not a blanket stale-artifact exemption. Register the
+# completed immutable study and verify its archived protocol before allowing it.
+HISTORICAL_PUBLIC_STUDIES = {
+    "3b96c26d328cffc308cb6de70e070748bba3c9fe7a7b229ccba6749f8aec2a91": {
+        "experiment_id": "cat-dog-cnn-feature-visualization-v2",
+        "configuration_path": "configs/archived_cat_dog_features_v2.yaml",
+        "source_revision": "9aa7f2ac49cd938d377db7bb66aae6ee58246338",
+        "superseded_by": "cat-dog-cnn-feature-visualization-v3",
+    }
 }
 SECRET_PATTERNS = {
     "AWS access key": re.compile(r"AKIA[0-9A-Z]{16}"),
@@ -92,8 +105,32 @@ def _check_notebooks(errors: list[str]) -> None:
         return
     guide_code = [cell for cell in guide["cells"] if cell["cell_type"] == "code"]
     guide_source = "\n".join("".join(cell["source"]) for cell in guide_code)
-    if "RUN_FULL_EXPERIMENT = False" not in guide_source:
-        errors.append(f"{guide_path.relative_to(ROOT)}: full experiment is enabled")
+    try:
+        parsed = ast.parse(guide_source)
+        switches: list[ast.expr | None] = []
+        value: ast.expr | None
+        for node in parsed.body:
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if any(
+                isinstance(target, ast.Name) and target.id == "RUN_FULL_EXPERIMENT"
+                for target in targets
+            ):
+                switches.append(value)
+        if not switches or any(
+            not isinstance(value, ast.Constant) or type(value.value) is not bool
+            for value in switches
+        ):
+            errors.append(
+                f"{guide_path.relative_to(ROOT)}: requires literal "
+                "RUN_FULL_EXPERIMENT = True or False"
+            )
+    except SyntaxError as error:
+        errors.append(f"{guide_path.relative_to(ROOT)}: invalid source code: {error.msg}")
     if any(cell.get("outputs") or cell.get("execution_count") is not None for cell in guide_code):
         errors.append(f"{guide_path.relative_to(ROOT)}: source guide contains execution output")
     if any(cell.get("attachments") for cell in guide["cells"]):
@@ -110,6 +147,50 @@ def _current_config_sha256() -> str:
     return load_config(ROOT / "configs/experiment.yaml", enforce_python=False).sha256
 
 
+def _current_experiment_id() -> str:
+    return load_config(ROOT / "configs/experiment.yaml", enforce_python=False).value(
+        "experiment", "id", str
+    )
+
+
+def _check_historical_identity(
+    historical: object, configuration_sha256: object, errors: list[str]
+) -> None:
+    if not isinstance(historical, dict):
+        errors.append("docs/results.json: historical evidence metadata must be an object")
+        return
+    registered = HISTORICAL_PUBLIC_STUDIES.get(str(configuration_sha256))
+    if registered is None or any(historical.get(key) != value for key, value in registered.items()):
+        errors.append("docs/results.json: historical study/source identity is not registered")
+        return
+    if (
+        historical.get("status") != "archived_completed_experiment"
+        or historical.get("configuration_sha256") != configuration_sha256
+        or historical.get("current_run_results_available") is not False
+    ):
+        errors.append("docs/results.json: historical evidence must remain explicitly archived")
+        return
+    archived_path = ROOT / registered["configuration_path"]
+    if archived_path.is_symlink() or not archived_path.resolve().is_relative_to(ROOT.resolve()):
+        errors.append("docs/results.json: archived configuration escapes the repository")
+        return
+    try:
+        archived = load_config(archived_path, enforce_python=False)
+        if (
+            archived.sha256 != configuration_sha256
+            or archived.value("experiment", "id", str) != registered["experiment_id"]
+        ):
+            errors.append(
+                "docs/results.json: archived configuration identity differs from evidence"
+            )
+        if historical["superseded_by"] != _current_experiment_id():
+            errors.append(
+                "docs/results.json: historical evidence names a different current experiment"
+            )
+    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as error:
+        errors.append(f"docs/results.json: invalid archived configuration: {error}")
+
+
 def _check_public_assets(paths: list[Path], errors: list[str]) -> None:
     manifest_path = ROOT / "docs/results.json"
     if not manifest_path.is_file():
@@ -123,7 +204,10 @@ def _check_public_assets(paths: list[Path], errors: list[str]) -> None:
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as error:
         errors.append(f"docs/results.json: invalid public evidence manifest: {error}")
         return
-    if provenance.get("configuration_sha256") != config_sha256:
+    evidence_sha256 = provenance.get("configuration_sha256")
+    if "historical_evidence" in manifest:
+        _check_historical_identity(manifest["historical_evidence"], evidence_sha256, errors)
+    elif evidence_sha256 != config_sha256:
         errors.append("docs/results.json: public evidence belongs to a superseded configuration")
     if manifest.get("protocol", {}).get("label_mode") != "species":
         errors.append(
